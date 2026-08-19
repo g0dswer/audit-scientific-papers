@@ -1,6 +1,6 @@
 ---
 name: audit-scientific-papers
-description: Use when critically appraising a clinical trial, paper, protocol, registry, supplement, statistical analysis plan, peer-review file, trial code, risk of bias, selective reporting, p-hacking signals, clinical importance, number needed to treat, or number needed to harm.
+description: Use when critically appraising a clinical trial, systematic review, meta-analysis, paper, protocol, registry, supplement, statistical analysis plan, peer-review file, study code, risk of bias, selective reporting, p-hacking signals, clinical importance, number needed to treat, number needed to harm, or aggregate-data reanalysis.
 ---
 
 # Audit Scientific Papers
@@ -48,7 +48,7 @@ If a referenced page, paper, registry, code repository, or current status is not
 
 ## Use independent audit modules
 
-For a complex randomized trial, use independent subagents when available. Read [references/subagent-protocol.md](references/subagent-protocol.md) and dispatch up to three non-overlapping roles:
+For a complex randomized trial or meta-analysis, use independent subagents when available. Read [references/subagent-protocol.md](references/subagent-protocol.md) and dispatch up to three non-overlapping roles:
 
 1. statistical analysis and code reproducibility;
 2. registry, protocol, selective reporting, and p-hacking evidence;
@@ -103,6 +103,53 @@ python3 scripts/verify_continuous_result.py changes BT ET BC EC --adjusted-estim
 
 Label reconstructed values as approximate unless analytic data, degrees of freedom, and exact model outputs are available.
 
+## Audit systematic reviews and meta-analyses
+
+If the target paper is a systematic review or meta-analysis, read
+[references/meta-analysis-audit.md](references/meta-analysis-audit.md),
+[references/meta-analysis-extraction.md](references/meta-analysis-extraction.md),
+[references/effect-measure-compatibility.md](references/effect-measure-compatibility.md),
+and [references/meta-analysis-sensitivity.md](references/meta-analysis-sensitivity.md) in
+full before interpreting pooled results.
+
+At minimum:
+
+- locate the protocol/registration, complete search methods, supplement, forest plots,
+  extraction data, risk-of-bias judgments, code, and original reports needed to verify
+  headline rows;
+- define the pooled estimand, effect measure, follow-up, adjustment target, and independent
+  cohort unit;
+- trace outcome and exposure provenance for every headline row;
+- reconstruct the published pool before changing rows or methods;
+- reject mixed effect measures by default; an explicit override may reproduce a published
+  mixed pool but must warn that random effects does not harmonize estimands;
+- assess duplicate cohorts, shared participants/controls, and multiple correlated rows;
+- compare DerSimonian–Laird, Paule–Mandel, restricted maximum likelihood, conventional
+  inference, Hartung–Knapp–Sidik–Jonkman inference, prediction intervals, and
+  leave-one-cohort-cluster-out refits when applicable;
+- grade conclusion robustness from the defensible sensitivity set, not from one value of p.
+
+Validate a row-level dataset and run the aggregate-data engine with:
+
+```bash
+python3 scripts/validate_meta_dataset.py meta_data.csv --json
+python3 scripts/reconstruct_meta_analysis.py meta_data.csv \
+  --analysis-id HEADLINE_POOL \
+  --common-measure HR \
+  --sensitivity all \
+  --allow-mixed-estimands \
+  --json
+```
+
+Use the override only if the publication mixed ratio measures in the headline pool. Keep
+the source interval level (`--input-confidence`, default 0.95) separate from the requested
+output interval (`--confidence`). Require one `analysis_id`; never combine separate forest
+plots simply because they share a CSV.
+
+Do not automatically convert hazard ratios, risk ratios, and odds ratios. If compatible
+native estimates cannot be isolated, prefer separate pools or structured synthesis without
+meta-analysis. Do not claim individual-participant-data reanalysis from aggregate rows.
+
 ## Judge bias and p-hacking carefully
 
 Read [references/bias-and-p-hacking.md](references/bias-and-p-hacking.md) in full.
@@ -123,7 +170,7 @@ Treat uncontrolled extensions as descriptive. Treat zero rare events in a small 
 
 ## Write the report
 
-Read [references/reporting-contract.md](references/reporting-contract.md) and use its section order and evidence vocabulary. Lead with a calibrated verdict. Distinguish:
+Read [references/reporting-contract.md](references/reporting-contract.md) and use its section order and evidence vocabulary. Lead with a calibrated verdict and end with its mandatory **Reanalysis recommendation**. Distinguish:
 
 - published numbers;
 - independently reconstructed calculations;
@@ -150,6 +197,25 @@ Before finalizing, confirm all applicable gates:
 - risk-of-bias judgment made at outcome level;
 - p-hacking language calibrated to evidence;
 - reproducibility limitations stated;
+- reanalysis recommendation states whether it is feasible now, requires specified data,
+  or is not quantitatively defensible, with the best alternative;
 - sources linked near claims.
+
+For a meta-analysis, also confirm:
+
+- protocol/registration and search strategy compared with the final review;
+- headline row-level data extracted and source locations preserved;
+- published pooled result reproduced before sensitivities, or the discrepancy explained;
+- effect measures and estimands checked for compatibility;
+- outcome and exposure provenance traced to original reports;
+- derived outcomes/exposures and source conflicts identified;
+- cohort overlap and multiple correlated rows assessed;
+- adjustment-set heterogeneity assessed for observational estimates;
+- between-study variance estimator and inference method identified;
+- Hartung–Knapp–Sidik–Jonkman and prediction-interval sensitivity considered;
+- leave-one-cohort-cluster-out influence analysis performed when estimable;
+- high-risk-of-bias and overlap sensitivity performed when substantively justified;
+- robustness classified as robust, directionally robust but inference-sensitive,
+  non-robust, or not assessable.
 
 If a gate cannot be completed, state why and reduce the certainty of the corresponding conclusion. Do not silently omit it.
