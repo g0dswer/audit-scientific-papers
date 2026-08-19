@@ -56,7 +56,7 @@ protocol for the following study:
 ```
 If you're a Claude Code user click here on the repo in CODE(green) then Download ZIP.
 
-Now in Claude Code click in Customize on the top left, go to Skills, click in Add then Upload a skill.
+Now in Claude Code click in Customize on the top left, go to Skills, click Add then Upload a skill.
 
 Then you select the ZIP file you downloaded.
 
