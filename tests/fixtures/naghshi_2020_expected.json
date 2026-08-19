@@ -1,0 +1,26 @@
+{
+  "source": {
+    "citation": "Naghshi et al. BMJ 2020;370:m2412",
+    "doi": "10.1136/bmj.m2412",
+    "figure": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7374797/figure/F2/"
+  },
+  "method": "DerSimonian-Laird random effects on the log ratio scale using standard errors reconstructed from printed 95% confidence intervals",
+  "strict_reference": {
+    "published_total": 0.9394212689,
+    "clean_total_direct_outcome": 0.9440359887,
+    "clean_total_direct_outcome_hr": 0.9512545874,
+    "published_plant": 0.9203106745,
+    "clean_plant_direct_outcome": 0.9222210700,
+    "clean_plant_direct_outcome_hr": 0.9191473860
+  },
+  "proposed_approximate_targets": {
+    "tolerance": 0.01,
+    "published_total": 0.939,
+    "clean_total_direct_outcome": 0.944,
+    "clean_total_direct_outcome_hr": 0.951,
+    "published_plant": 0.920,
+    "clean_plant_direct_outcome": 0.929,
+    "clean_plant_direct_outcome_hr": 0.927
+  },
+  "interpretation": "The proposed plant targets are calibration bands, not exact truth. Strict values follow the versioned row-level fixture and must not be forced by post hoc exclusions."
+}
