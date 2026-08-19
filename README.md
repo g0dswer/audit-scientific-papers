@@ -27,7 +27,7 @@ Providers i recommnend because the output was more rigorous and reliable: OpenAI
 - ends with a concrete reanalysis recommendation: feasible now, feasible with specified
   additional data, or not quantitatively defensible with a better alternative.
 
-## Use it in ChatGPT, Codex or Work mode
+## Use it in ChatGPT, Codex, Work mode or Claude Code(coword, science)
 
 Paste this prompt:
 
@@ -54,6 +54,18 @@ protocol for the following study:
 
 [PASTE THE LINK, DOI, OR ATTACH THE FILE]
 ```
+If you're a Claude Code user click here on the repo in CODE(green) then Download ZIP.
+
+Now in Claude Code click in Customize on the top left, go to Skills, click in Add then Upload a skill.
+
+Then you select the ZIP file you downloaded.
+
+Now just type:
+```text
+  /audit-scientific-papers 
+  
+  [PASTE THE LINK, DOI, OR ATTACH THE FILE]
+```  
 
 ## Expected report
 
