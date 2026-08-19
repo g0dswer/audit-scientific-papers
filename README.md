@@ -53,6 +53,7 @@ https://github.com/g0dswer/audit-scientific-papers
 
 Study:
 [PASTE THE LINK, DOI, OR ATTACH THE FILE]
+'''
 
 ## Expected report
 
