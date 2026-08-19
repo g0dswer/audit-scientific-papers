@@ -1,79 +1,116 @@
 # Audit Scientific Papers
 
-A reusable ChatGPT skill for rigorous critical appraisal of scientific papers, with an emphasis on clinical trials.
+A reusable skill for rigorous, source-backed appraisal of clinical studies, systematic
+reviews, and meta-analyses.
 
-Give it a paper, link, DOI, or uploaded file. The skill guides ChatGPT or another LLM provider - Worked on Claude Anthropic and Grok, did NOT work on Gemini - through the
-article, supplementary materials, trial registry, protocol, statistical analysis
-plan, and other available evidence before reaching a conclusion.
-
-Providers i recommnend because the output was more rigorous and reliable: OpenAI, Anthropic.
+Give it a paper, DOI, URL, or uploaded file. It searches for the article's supplements,
+protocol or registration history, statistical analysis plan, peer-review material, code,
+data, and other public evidence before judging the claims.
 
 ## What it does
 
-- Discovers articles, supplements, protocols, statistical analysis plans, peer-review files, code, and data when publicly available.
-- Searches native trial registries and the World Health Organization portal, compares dated histories, and reconciles duplicate registrations across countries.
-- Reconstructs the primary result and checks the reported calculations.
-- Examines missing data, exclusions, multiplicity, subgroup analyses, and outcome
-  switching.
-- Assesses risk of bias at the result level.
-- Distinguishes documented problems from patterns merely compatible with analytic
-  flexibility or p-hacking.
-- Calculates absolute effects and the number needed to treat or harm when the data
-  support those calculations.
-- Checks confidence intervals, risk differences, Cohen's d, and Hedges' g with clear
-  limits on approximate reconstructions.
-- Separates statistical significance from clinical importance.
-- Reports what is supported, uncertain, unsupported, or not reproducible from public
-  materials.
+- builds a dated evidence manifest instead of relying on the article alone;
+- searches trial and review registries, protocols, supplements, code, and data;
+- reconstructs headline statistical results when the public inputs permit it;
+- audits missing data, exclusions, multiplicity, selective reporting, spin, and p-hacking
+  signals without inferring misconduct from weak evidence;
+- assesses result-level risk of bias, clinical importance, safety, and external validity;
+- calculates absolute effects and number needed to treat or harm only when valid binary
+  data support them;
+- audits meta-analysis searches, row-level provenance, mixed effect measures, duplicate
+  cohorts, heterogeneity, prediction intervals, and influence;
+- runs fixed-effect and random-effects aggregate meta-analysis using
+  DerSimonian–Laird, Paule–Mandel, or restricted maximum likelihood, with conventional or
+  Hartung–Knapp–Sidik–Jonkman inference;
+- ends with a concrete reanalysis recommendation: feasible now, feasible with specified
+  additional data, or not quantitatively defensible with a better alternative.
 
-## Quick start in ChatGPT
+## Use it in ChatGPT or Codex
 
-In a ChatGPT environment that supports Chat, Work Mode, Codex and personal skills, paste:
-
-```text
-Install or import the personal skill from this public repository:
-
-https://github.com/g0dswer/audit-scientific-papers
-
-Read SKILL.md and every file it references. Preserve the repository structure, run
-the tests in scripts/test_calculations.py, and validate the skill before using it.
-
-Then use $audit-scientific-papers to critically appraise this study.
-
-Study:
-[PASTE THE LINK, DOI, OR ATTACH THE FILE]
-```
-
-If personal skill installation is unavailable, paste this instead:
+Paste this prompt:
 
 ```text
-Use SKILL.md and all referenced files from this repository as the mandatory audit
-protocol for the following study:
-
+Install or import the Audit Scientific Papers skill from:
 https://github.com/g0dswer/audit-scientific-papers
 
-Study:
-[PASTE THE LINK, DOI, OR ATTACH THE FILE]
+Read SKILL.md and every referenced file, preserve the repository structure, run all
+tests, and validate the skill. Then use Audit Scientific Papers to audit this study:
+
+[PASTE DOI OR URL, OR ATTACH THE PAPER]
 ```
 
-## Expected output
+If your interface supports skill mentions, select `@Audit Scientific Papers`. In Codex,
+the installed skill may be invoked as `$audit-scientific-papers`.
 
-The final report includes:
+If skill installation is unavailable, ask the model to use `SKILL.md` and every referenced
+file in this repository as the mandatory audit protocol.
 
-1. A calibrated overall verdict.
-2. Study design, population, intervention, comparator, outcomes, and estimand.
-3. Independent reconstruction of the main result where possible.
-4. Clinical importance and absolute effects.
-5. Number needed to treat or harm, including uncertainty, when valid.
-6. Result-level risk-of-bias assessment.
-7. Selective-reporting and p-hacking assessment with evidence for and against.
-8. Safety, external validity, spin, and reproducibility limitations.
-9. Direct links to the evidence used.
+## Expected report
+
+The report contains:
+
+1. a calibrated verdict;
+2. study design and exact estimand;
+3. source manifest and prespecification timeline;
+4. independent numerical reconstruction where possible;
+5. clinical importance, absolute effects, and valid number needed to treat or harm;
+6. result-level risk of bias;
+7. selective-reporting and p-hacking evidence, including counterevidence;
+8. safety, external validity, spin, and reproducibility limits;
+9. supported, uncertain, and unsupported claims;
+10. a specific reanalysis recommendation;
+11. direct links to the evidence used.
+
+For meta-analyses it also reports row provenance, effect-measure compatibility, cohort
+overlap, alternative random-effects models, Hartung–Knapp–Sidik–Jonkman intervals,
+prediction intervals, leave-one-cohort-out influence, and conclusion robustness.
+
+## Quantitative tools
+
+The tools require Python 3 and use the standard library for the meta-analysis engine.
+SciPy is optional and is used only for the binary calculator's Fisher exact test when
+available.
+
+```bash
+git clone https://github.com/g0dswer/audit-scientific-papers.git
+cd audit-scientific-papers
+
+# Run every test
+python3 -m unittest discover -s scripts -p 'test_*.py' -v
+
+# Validate a row-level meta-analysis dataset
+python3 scripts/validate_meta_dataset.py meta_data.csv --json
+
+# Reconstruct a published pool
+python3 scripts/reconstruct_meta_analysis.py meta_data.csv \
+  --analysis-id primary_pool \
+  --tau2 DL \
+  --expected-pooled 0.94 \
+  --json
+
+# Run the provenance and model sensitivity ladder
+python3 scripts/reconstruct_meta_analysis.py meta_data.csv \
+  --analysis-id primary_pool \
+  --common-measure HR \
+  --sensitivity all \
+  --allow-mixed-estimands \
+  --json
+```
+
+Use `--allow-mixed-estimands` only when the published forest plot itself mixed native
+ratio measures and the first step must reproduce that choice. It does not make the pooled
+estimand scientifically valid. The source intervals are assumed to be 95% intervals by
+default; use `--input-confidence` when they are not. `--confidence` controls the requested
+output interval without changing the reconstructed study variances.
+
+The repository includes a versioned Naghshi 2020 fixture as a regression test. It checks
+published reconstruction and cleaner provenance/common-measure scenarios without changing
+study eligibility merely to force a target number.
 
 ## Optional Luna Max subagent
 
-If your Codex environment supports reusable custom subagents and `gpt-5.6-luna` is
-available, create `~/.codex/agents/luna-worker.toml` with:
+If Codex supports reusable custom subagents and `gpt-5.6-luna` is available, create
+`~/.codex/agents/luna-worker.toml`:
 
 ```toml
 name = "luna_worker"
@@ -95,41 +132,22 @@ Work only on the concrete task delegated by the parent agent.
 """
 ```
 
-The parent agent may delegate one clearly bounded audit module at a time to
-`luna_worker`. Luna remains an optional execution worker: the parent must independently
-verify important calculations and resolve disagreements. If custom agents or this model
-are unavailable, the skill uses other independent agents or runs the same modules
-sequentially.
+Delegate only bounded modules. The parent agent must independently verify material numbers,
+source dates, estimands, and disagreements. See
+[the subagent protocol](references/subagent-protocol.md).
 
-See [the complete subagent protocol](references/subagent-protocol.md) for role prompts,
-evidence boundaries, fallback behavior, and adjudication rules.
+## Important limits
 
-## Local validation
-
-The calculation tools use Python 3. SciPy is optional and is used only when available
-for the two-sided Fisher exact test.
-
-```bash
-git clone https://github.com/g0dswer/audit-scientific-papers.git
-cd audit-scientific-papers
-python3 -m unittest discover -s scripts -p 'test_*.py' -v
-```
-
-The current release passes 29 automated tests and the official skill validator. It
-was also evaluated with independent fresh-context scenarios covering inconclusive
-number-needed-to-treat estimates, p-hacking allegations, subgroup errors,
-uncontrolled extensions, and rare safety events.
-
-## Important limitations
-
-- The skill cannot recreate unavailable individual participant data or undocumented
-  statistical models.
-- A reconstructed aggregate calculation is not automatically equivalent to the
-  study's adjusted analysis.
-- Multiplicity or a late analysis plan can raise concern but does not, by itself,
-  prove intentional p-hacking or misconduct.
-- This is a structured appraisal tool, not a substitute for independent statistical,
-  clinical, or regulatory judgment.
+- Aggregate reconstruction cannot recover unavailable participant-level data, covariance,
+  missing-data mechanisms, or undocumented models.
+- A random-effects model does not make hazard ratios, risk ratios, and odds ratios the same
+  estimand.
+- A reconstructed unadjusted calculation is not automatically equivalent to a published
+  adjusted model.
+- Multiplicity or a late analysis plan can raise concern but does not prove intentional
+  p-hacking or misconduct.
+- This tool supports critical appraisal; it does not replace clinical, statistical,
+  regulatory, or domain judgment.
 
 ## License
 
