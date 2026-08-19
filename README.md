@@ -3,8 +3,9 @@
 A reusable skill for rigorous, source-backed appraisal of clinical studies, systematic
 reviews, and meta-analyses.
 
-Give it a paper, link, DOI, or uploaded file. The skill guides ChatGPT or another LLM provider - Worked on Claude Anthropic and Grok, 
-did NOT work on Gemini - through the article's supplements,protocol or registration history, statistical analysis plan, peer-review material, code, data, and other public evidence before judging the claims.
+Give it a paper, link, DOI, or uploaded file. The skill guides ChatGPT or another LLM provider through the article's supplements,protocol or registration history, statistical analysis plan, peer-review material, code, data, and other public evidence before judging the claims. 
+
+Works on ChatGPT, Claude Anthropic and Grok, did NOT work(for me) on Gemini.
 
 Providers i recommnend because the output was more rigorous and reliable: OpenAI, Anthropic.
 
