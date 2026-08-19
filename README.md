@@ -135,10 +135,13 @@ study eligibility merely to force a target number.
 
 ## Optional Luna Max subagent
 
-If Codex supports reusable custom subagents and `gpt-5.6-luna` is available, create
-`~/.codex/agents/luna-worker.toml`:
+If you're in Codex, it is a good strategy to deploy Luna Max Subagents to do the data scrapping because it is so cheap and accurate.
 
-```toml
+Just prompt codex this:
+
+```text
+Create a Luna Max subagent following this:
+create a file `~/.codex/agents/luna-worker.toml`:
 name = "luna_worker"
 description = "Focused execution worker for clear, bounded delegated tasks with concise evidence-backed handoff."
 model = "gpt-5.6-luna"
@@ -155,7 +158,7 @@ Work only on the concrete task delegated by the parent agent.
 - Do not spawn additional agents. Stop and report if the task requires broader scope, new authority, or unavailable input.
 - Validate the result in proportion to the change, using targeted checks rather than broad unrelated work.
 - Return a concise handoff containing: outcome, evidence or checks run, files changed, and any remaining caveats.
-"""
+
 ```
 
 Delegate only bounded modules. The parent agent must independently verify material numbers,
