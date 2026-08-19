@@ -36,13 +36,7 @@ https://github.com/g0dswer/audit-scientific-papers
 Read SKILL.md and every file it references. Preserve the repository structure, run
 the tests in scripts/test_calculations.py, and validate the skill before using it.
 
-Then use $audit-scientific-papers to critically appraise this study. Retrieve the full
-article and all reasonably available supplementary materials, registry history,
-protocol, statistical analysis plan, peer-review files, code, and data. Reconstruct
-the main results, assess risk of bias, selective reporting, multiplicity, p-hacking
-signals, clinical importance, harms, and absolute effects. Calculate the number
-needed to treat or harm only when defensible, and clearly separate documented
-evidence from suspicion or unavailable information.
+Then use $audit-scientific-papers to critically appraise this study.
 
 Study:
 [PASTE THE LINK, DOI, OR ATTACH THE FILE]
