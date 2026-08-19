@@ -30,6 +30,13 @@ Dispatch only non-overlapping roles:
 2. registry, protocol, selective-reporting, and p-hacking evidence;
 3. risk of bias, clinical importance, safety, and absolute effects.
 
+For a systematic review or meta-analysis, use these non-overlapping roles instead:
+
+1. search, protocol/registration, study selection, and reporting deviations;
+2. row-level extraction, original-report provenance, cohort overlap, and adjustment sets;
+3. numerical reconstruction, effect-measure compatibility, model sensitivity, and
+   conclusion robustness.
+
 Do not dispatch a module merely to manufacture agreement. If agent capacity is unavailable,
 execute the same modules sequentially and state that the workflow was serial without
 treating serial work as a methodological limitation.
@@ -51,6 +58,26 @@ full-text excerpts beyond what is necessary for the assigned audit.
 
 Each module must remain within its role, flag out-of-scope evidence, and return uncertainty
 rather than filling gaps from assumptions.
+
+### Meta-analysis role prompts
+
+**Search/protocol role:** Build the dated review-method timeline; compare registration or
+protocol with final eligibility, databases, search dates, outcomes, subgroups, synthesis,
+risk-of-bias, and publication-bias methods. Re-run a targeted omission search. Return
+documented deviations, counterevidence, and unavailable materials without extracting the
+headline forest numerically.
+
+**Provenance/dependence role:** For each supplied headline row, trace the original outcome,
+exposure/intervention, measure, follow-up, adjustment set, source location, cohort, and
+possible participant overlap. Use the provenance vocabulary in
+`meta-analysis-extraction.md`. Do not calculate the pooled result or receive an expected
+conclusion.
+
+**Numerical/model role:** Using the frozen row-level dataset, reproduce the published pool,
+then run the prespecified sensitivity ladder. Reject mixed measures by default; permit an
+explicit override only for published reconstruction. Report formulas, checks, prediction
+interval, leave-one-cohort-cluster-out results, and discrepancies. Do not change provenance
+flags or eligibility to meet an expected target.
 
 ## 3. Role A: statistics and reproducibility
 
@@ -219,6 +246,9 @@ The parent agent independently verifies all material numerical claims, especiall
 - reconstructed standard errors and approximate values of p;
 - interaction or group-by-time tests;
 - safety event rates and rare-harm precision.
+- headline pooled estimates, between-study variance, confidence and prediction intervals;
+- row counts and cohort-cluster counts in every meta-analysis sensitivity;
+- effect-measure and provenance filters used in the clean pool.
 
 If a module supplies a calculation without enough inputs, label it not reproducible rather
 than guessing. If two modules disagree, check raw source locations, estimands, analysis
@@ -269,7 +299,7 @@ The parent report should state the stop condition and reduce certainty for that 
 The parent agent combines module outputs into the report contract in this order: calibrated
 verdict; study and estimand; primary reconstruction; clinical importance; NNT/NNH; RoB 2;
 p-hacking evidence; statistical errors and reproducibility; safety, external validity,
-and spin; supported/uncertain/unsupported claims; direct links.
+and spin; supported/uncertain/unsupported claims; reanalysis recommendation; direct links.
 
 The synthesis must preserve calibrated language, report counterevidence to p-hacking,
 avoid the difference-in-significance fallacy, and distinguish reported numbers from
