@@ -63,7 +63,7 @@ Now in Claude Code click in Customize on the top left, go to Skills, click Add t
 
 Then you select the ZIP file you downloaded.
 
-Now just type:
+Now just paste this prompt:
 
 ```text
   /audit-scientific-papers 
