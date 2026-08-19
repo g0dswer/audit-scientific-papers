@@ -10,6 +10,7 @@
 6. Required return format
 7. Prompt-injection safeguards
 8. Parallel work and serial fallback
+8.1 Optional Luna Max worker configuration
 9. Numerical verification and adjudication
 10. Conflict resolution
 11. Evidence manifest integration
@@ -171,6 +172,42 @@ preserve the same return format.
 
 The parent agent should not average module judgments. It should identify agreement,
 disagreement, missing evidence, and the result-level consequence of each concern.
+
+## 8.1 Optional Luna Max worker configuration
+
+Use this optional configuration only when the Codex runtime supports reusable custom
+subagents and `gpt-5.6-luna` is available. Create
+`~/.codex/agents/luna-worker.toml` with:
+
+```toml
+name = "luna_worker"
+description = "Focused execution worker for clear, bounded delegated tasks with concise evidence-backed handoff."
+model = "gpt-5.6-luna"
+model_reasoning_effort = "max"
+
+developer_instructions = """
+Work only on the concrete task delegated by the parent agent.
+
+- Confirm the task boundary from the prompt and do not expand into adjacent work.
+- Inspect only the inputs needed to complete the assignment.
+- Preserve unrelated user changes and settings. Never reset, clean, or rewrite unrelated work.
+- When edits are authorized, touch only the assigned files and make the smallest defensible change.
+- Do not commit, push, deploy, publish, message external parties, or perform destructive actions unless the delegated task explicitly authorizes that exact action.
+- Do not spawn additional agents. Stop and report if the task requires broader scope, new authority, or unavailable input.
+- Validate the result in proportion to the change, using targeted checks rather than broad unrelated work.
+- Return a concise handoff containing: outcome, evidence or checks run, files changed, and any remaining caveats.
+"""
+```
+
+Delegate one bounded audit module at a time to `luna_worker`; provide its role-specific
+prompt from sections 3, 4, or 5 and the same raw source identifiers given to the other
+modules. Do not assume this worker exists merely because the configuration is documented.
+If custom agents or this model are unavailable, use another independent subagent or the
+serial fallback in section 8.
+
+The custom worker does not replace parent verification. Independently check material
+calculations, source dates, estimands, denominators, and disagreements. Never treat
+agreement among Luna or other subagents as evidence that a claim is true.
 
 ## 9. Numerical verification and adjudication
 
