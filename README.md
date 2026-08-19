@@ -2,9 +2,11 @@
 
 A reusable ChatGPT skill for rigorous critical appraisal of scientific papers, with an emphasis on clinical trials.
 
-Give it a paper, link, DOI, or uploaded file. The skill guides ChatGPT through the
+Give it a paper, link, DOI, or uploaded file. The skill guides ChatGPT or another LLM provider - Worked on Claude Anthropic and Grok, did NOT work on Gemini - through the
 article, supplementary materials, trial registry, protocol, statistical analysis
 plan, and other available evidence before reaching a conclusion.
+
+Providers i recommnend because the output was more rigorous and reliable: OpenAI, Anthropic.
 
 ## What it does
 
@@ -26,7 +28,7 @@ plan, and other available evidence before reaching a conclusion.
 
 ## Quick start in ChatGPT
 
-In a ChatGPT environment that supports Codex, Work Mode, and personal skills, paste:
+In a ChatGPT environment that supports Chat, Work Mode, Codex and personal skills, paste:
 
 ```text
 Install or import the personal skill from this public repository:
