@@ -1,9 +1,9 @@
 ---
-name: audit-clinical-trials
+name: audit-scientific-papers
 description: Use when critically appraising a clinical trial, paper, protocol, registry, supplement, statistical analysis plan, peer-review file, trial code, risk of bias, selective reporting, p-hacking signals, clinical importance, number needed to treat, or number needed to harm.
 ---
 
-# Audit Clinical Trials
+# Audit Scientific Papers
 
 ## Core principle
 
