@@ -31,7 +31,7 @@ Providers i recommnend because the output was more rigorous and reliable: OpenAI
 Paste this prompt:
 
 ```text
-Install or import or run the Audit Scientific Papers skill from:
+Install or import the Audit Scientific Papers skill from:
 https://github.com/g0dswer/audit-scientific-papers
 
 Read SKILL.md and every referenced file, preserve the repository structure, run all
@@ -53,7 +53,7 @@ https://github.com/g0dswer/audit-scientific-papers
 
 Study:
 [PASTE THE LINK, DOI, OR ATTACH THE FILE]
-'''
+```
 
 ## Expected report
 
