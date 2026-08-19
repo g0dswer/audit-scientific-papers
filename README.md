@@ -7,7 +7,7 @@ Give it a paper, link, DOI, or uploaded file. The skill guides ChatGPT or anothe
 
 Works on ChatGPT, Claude Anthropic and Grok, did NOT work(for me) on Gemini.
 
-Providers i recommnend because the output was more rigorous and reliable: OpenAI, Anthropic.
+Providers i recommnend because the output was more rigorous and reliable: OpenAI(better on Work mode or Codex) or Anthropic(better on Cowork, Code or Science).
 
 ## What it does
 
@@ -47,12 +47,11 @@ the installed skill may be invoked as `$audit-scientific-papers`.
 If personal skill installation is unavailable, paste this instead:
 
 ```text
+Open https://github.com/g0dswer/audit-scientific-papers
+
 Use SKILL.md and all referenced files from this repository as the mandatory audit
 protocol for the following study:
 
-https://github.com/g0dswer/audit-scientific-papers
-
-Study:
 [PASTE THE LINK, DOI, OR ATTACH THE FILE]
 ```
 
@@ -162,4 +161,4 @@ source dates, estimands, and disagreements. See
 
 ## License
 
-[MIT License](LICENSE) — Copyright 2026 Thiago Guimarães Gruber.
+[MIT License](LICENSE) — Copyright 2026 - Thiago Guimarães Gruber.
