@@ -3,9 +3,10 @@
 A reusable skill for rigorous, source-backed appraisal of clinical studies, systematic
 reviews, and meta-analyses.
 
-Give it a paper, DOI, URL, or uploaded file. It searches for the article's supplements,
-protocol or registration history, statistical analysis plan, peer-review material, code,
-data, and other public evidence before judging the claims.
+Give it a paper, link, DOI, or uploaded file. The skill guides ChatGPT or another LLM provider - Worked on Claude Anthropic and Grok, 
+did NOT work on Gemini - through the article's supplements,protocol or registration history, statistical analysis plan, peer-review material, code, data, and other public evidence before judging the claims.
+
+Providers i recommnend because the output was more rigorous and reliable: OpenAI, Anthropic.
 
 ## What it does
 
@@ -25,12 +26,12 @@ data, and other public evidence before judging the claims.
 - ends with a concrete reanalysis recommendation: feasible now, feasible with specified
   additional data, or not quantitatively defensible with a better alternative.
 
-## Use it in ChatGPT or Codex
+## Use it in ChatGPT, Codex or Work mode
 
 Paste this prompt:
 
 ```text
-Install or import the Audit Scientific Papers skill from:
+Install or import or run the Audit Scientific Papers skill from:
 https://github.com/g0dswer/audit-scientific-papers
 
 Read SKILL.md and every referenced file, preserve the repository structure, run all
@@ -42,8 +43,16 @@ tests, and validate the skill. Then use Audit Scientific Papers to audit this st
 If your interface supports skill mentions, select `@Audit Scientific Papers`. In Codex,
 the installed skill may be invoked as `$audit-scientific-papers`.
 
-If skill installation is unavailable, ask the model to use `SKILL.md` and every referenced
-file in this repository as the mandatory audit protocol.
+If personal skill installation is unavailable, paste this instead:
+
+```text
+Use SKILL.md and all referenced files from this repository as the mandatory audit
+protocol for the following study:
+
+https://github.com/g0dswer/audit-scientific-papers
+
+Study:
+[PASTE THE LINK, DOI, OR ATTACH THE FILE]
 
 ## Expected report
 
