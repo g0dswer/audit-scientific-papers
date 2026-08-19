@@ -340,3 +340,12 @@ Complete these fields before writing the verdict:
 
 These sources guide method selection and reporting. The study-specific evidence remains
 the article, its dated supplements, registry history, protocol, SAP, and accessible data.
+
+## Meta-analysis routing
+
+This file governs primary-study and clinical-trial statistical checks. For any systematic
+review or meta-analysis, also read `meta-analysis-audit.md`,
+`meta-analysis-extraction.md`, `effect-measure-compatibility.md`, and
+`meta-analysis-sensitivity.md` in full. Use their row-provenance, effect-compatibility,
+dependence, heterogeneity, prediction-interval, and sensitivity requirements. Do not adapt
+a two-arm trial calculator as a substitute for an inverse-variance meta-analysis.
