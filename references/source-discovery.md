@@ -96,6 +96,13 @@ Route the tool according to the object needed:
 | Corrections | Publisher and indexing service | Notice date and affected claim |
 | Reporting checklist | Publisher or reporting-guideline site | Version and completed fields |
 
+If the study has a registration identifier, appears to be a clinical trial, or may
+have been registered in more than one jurisdiction, read
+[registry-discovery.md](registry-discovery.md) before searching. That reference provides
+registry-specific routes, history and attachment checks, duplicate-registration logic,
+and a fallback sequence for blocked portals. Do not assume that every registry exposes
+the same fields, public history, or document attachments.
+
 Do not use a search result URL as the source link in the final report. Open the direct
 document or authoritative record and cite that direct URL near the supported claim.
 
@@ -107,8 +114,10 @@ Follow this sequence unless a source is unavailable:
 2. Open the article landing page and identify article type, publication date, DOI, and
    links to all supplements, corrections, and peer-review materials.
 3. Retrieve the full text and every listed supplement, not only the first file.
-4. Find the registry identifier in the article, then inspect the current record and its
-   complete history.
+4. Find every registry identifier in the article and supplements. Follow
+   [registry-discovery.md](registry-discovery.md) to inspect native records, dated
+   history, attachments, World Health Organization bridging, and plausible duplicate
+   registrations.
 5. Locate protocol and statistical analysis plan versions, including later amendments.
 6. Search for a preprint, earlier abstract, correction, retraction, expression of
    concern, or post-publication comment.
@@ -224,6 +233,7 @@ Before interpretation, confirm:
 - [ ] Article landing page and full text checked.
 - [ ] Every listed supplement checked or limitation recorded.
 - [ ] Registry current record and history checked.
+- [ ] Cross-registrations and duplicate records searched and reconciled.
 - [ ] Protocol and SAP searched by version/date.
 - [ ] Peer-review, preprint, correction, and retraction searches completed.
 - [ ] Public code/data and data-sharing statement checked.
