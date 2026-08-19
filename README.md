@@ -29,7 +29,7 @@ In a ChatGPT environment that supports Codex, Work Mode, and personal skills, pa
 ```text
 Install or import the personal skill from this public repository:
 
-https://github.com/g0dswer/g0dswer-audit-clinical-trials
+https://github.com/g0dswer/statistical-audit-scientific-papers
 
 Read SKILL.md and every file it references. Preserve the repository structure, run
 the tests in scripts/test_calculations.py, and validate the skill before using it.
@@ -52,7 +52,7 @@ If personal skill installation is unavailable, paste this instead:
 Use SKILL.md and all referenced files from this repository as the mandatory audit
 protocol for the following study:
 
-https://github.com/g0dswer/g0dswer-audit-clinical-trials
+https://github.com/g0dswer/statistical-audit-scientific-papers
 
 Study:
 [PASTE THE LINK, DOI, OR ATTACH THE FILE]
@@ -72,14 +72,48 @@ The final report includes:
 8. Safety, external validity, spin, and reproducibility limitations.
 9. Direct links to the evidence used.
 
+## Optional Luna Max subagent
+
+If your Codex environment supports reusable custom subagents and `gpt-5.6-luna` is
+available, create `~/.codex/agents/luna-worker.toml` with:
+
+```toml
+name = "luna_worker"
+description = "Focused execution worker for clear, bounded delegated tasks with concise evidence-backed handoff."
+model = "gpt-5.6-luna"
+model_reasoning_effort = "max"
+
+developer_instructions = """
+Work only on the concrete task delegated by the parent agent.
+
+- Confirm the task boundary from the prompt and do not expand into adjacent work.
+- Inspect only the inputs needed to complete the assignment.
+- Preserve unrelated user changes and settings. Never reset, clean, or rewrite unrelated work.
+- When edits are authorized, touch only the assigned files and make the smallest defensible change.
+- Do not commit, push, deploy, publish, message external parties, or perform destructive actions unless the delegated task explicitly authorizes that exact action.
+- Do not spawn additional agents. Stop and report if the task requires broader scope, new authority, or unavailable input.
+- Validate the result in proportion to the change, using targeted checks rather than broad unrelated work.
+- Return a concise handoff containing: outcome, evidence or checks run, files changed, and any remaining caveats.
+"""
+```
+
+The parent agent may delegate one clearly bounded audit module at a time to
+`luna_worker`. Luna remains an optional execution worker: the parent must independently
+verify important calculations and resolve disagreements. If custom agents or this model
+are unavailable, the skill uses other independent agents or runs the same modules
+sequentially.
+
+See [the complete subagent protocol](references/subagent-protocol.md) for role prompts,
+evidence boundaries, fallback behavior, and adjudication rules.
+
 ## Local validation
 
 The calculation tools use Python 3. SciPy is optional and is used only when available
 for the two-sided Fisher exact test.
 
 ```bash
-git clone https://github.com/g0dswer/g0dswer-audit-clinical-trials.git
-cd g0dswer-audit-clinical-trials
+git clone https://github.com/g0dswer/statistical-audit-scientific-papers.git
+cd statistical-audit-scientific-papers
 python3 -m unittest discover -s scripts -p 'test_*.py' -v
 ```
 
