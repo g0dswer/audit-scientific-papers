@@ -1,8 +1,9 @@
 interface:
   display_name: Audit Scientific Papers
-  short_description: Rigorous statistical and bias audit
+  short_description: Rigorous paper and meta-analysis audit
   default_prompt: Use $audit-scientific-papers to critically audit this scientific
-    paper, including supplements, bias, p-hacking signals, and absolute effects.
+    paper, including supplements, protocols, bias, p-hacking signals, statistical
+    reconstruction, absolute effects, and a reanalysis recommendation.
   icon_small: assets/icon.svg
   icon_large: assets/icon.svg
 policy:
