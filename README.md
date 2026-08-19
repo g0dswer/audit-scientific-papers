@@ -1,6 +1,6 @@
-# Clinical Trial Auditor
+# Audit Scientific Papers
 
-A reusable ChatGPT skill for rigorous critical appraisal of clinical trials.
+A reusable ChatGPT skill for rigorous critical appraisal of scientific papers, with an emphasis on clinical trials.
 
 Give it a paper, link, DOI, or uploaded file. The skill guides ChatGPT through the
 article, supplementary materials, trial registry, protocol, statistical analysis
@@ -8,6 +8,8 @@ plan, and other available evidence before reaching a conclusion.
 
 ## What it does
 
+- Discovers articles, supplements, protocols, statistical analysis plans, peer-review files, code, and data when publicly available.
+- Searches native trial registries and the World Health Organization portal, compares dated histories, and reconciles duplicate registrations across countries.
 - Reconstructs the primary result and checks the reported calculations.
 - Examines missing data, exclusions, multiplicity, subgroup analyses, and outcome
   switching.
@@ -29,12 +31,12 @@ In a ChatGPT environment that supports Codex, Work Mode, and personal skills, pa
 ```text
 Install or import the personal skill from this public repository:
 
-https://github.com/g0dswer/statistical-audit-scientific-papers
+https://github.com/g0dswer/audit-scientific-papers
 
 Read SKILL.md and every file it references. Preserve the repository structure, run
 the tests in scripts/test_calculations.py, and validate the skill before using it.
 
-Then use $audit-clinical-trials to critically appraise this study. Retrieve the full
+Then use $audit-scientific-papers to critically appraise this study. Retrieve the full
 article and all reasonably available supplementary materials, registry history,
 protocol, statistical analysis plan, peer-review files, code, and data. Reconstruct
 the main results, assess risk of bias, selective reporting, multiplicity, p-hacking
@@ -52,7 +54,7 @@ If personal skill installation is unavailable, paste this instead:
 Use SKILL.md and all referenced files from this repository as the mandatory audit
 protocol for the following study:
 
-https://github.com/g0dswer/statistical-audit-scientific-papers
+https://github.com/g0dswer/audit-scientific-papers
 
 Study:
 [PASTE THE LINK, DOI, OR ATTACH THE FILE]
@@ -112,8 +114,8 @@ The calculation tools use Python 3. SciPy is optional and is used only when avai
 for the two-sided Fisher exact test.
 
 ```bash
-git clone https://github.com/g0dswer/statistical-audit-scientific-papers.git
-cd statistical-audit-scientific-papers
+git clone https://github.com/g0dswer/audit-scientific-papers.git
+cd audit-scientific-papers
 python3 -m unittest discover -s scripts -p 'test_*.py' -v
 ```
 
