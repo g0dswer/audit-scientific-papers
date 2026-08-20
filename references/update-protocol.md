@@ -73,6 +73,11 @@ audit and follow its current routing to references. If the host cannot reliably 
 updated skill instructions in the current task, tell the user that installation succeeded
 and ask them to invoke the skill again in a new task.
 
+If the updater reports `status: updated` together with `bookkeeping_warning`, the new
+version is already active and must still be reloaded. Report the warning, retain the backup,
+and do not mislabel the operation as an installation failure; the earlier fsynced recovery
+record and the installed `.update-state.json` remain the recovery sources.
+
 ## Manual-update fallback
 
 For `manual_update_required`, or in a host that cannot execute or replace local skill

@@ -464,6 +464,43 @@ class TransactionTests(unittest.TestCase):
             self.assertEqual((root / "marker.txt").read_text(), "1.0.0")
             self.assertFalse(list(parent.glob(".audit-scientific-papers.backup-*")))
 
+    def test_post_swap_metadata_failure_reports_installed_with_warning(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            root = parent / "audit-scientific-papers"
+            candidate = parent / "candidate"
+            write_managed_skill(root, "1.0.0")
+            write_candidate(candidate, manifest("1.1.0"))
+            original_write = update_skill._write_lock_metadata
+            calls = 0
+
+            def fail_activated_metadata(descriptor, payload):
+                nonlocal calls
+                calls += 1
+                if calls == 3:
+                    raise OSError("simulated final metadata failure")
+                return original_write(descriptor, payload)
+
+            with mock.patch.object(
+                update_skill,
+                "_write_lock_metadata",
+                side_effect=fail_activated_metadata,
+            ):
+                result = update_skill.activate_candidate(
+                    candidate,
+                    root,
+                    installed_version="1.0.0",
+                    available_version="1.1.0",
+                    expected_manifest=manifest("1.1.0"),
+                )
+
+            self.assertEqual((root / "VERSION").read_text().strip(), "1.1.0")
+            self.assertIn("bookkeeping_warning", result)
+            self.assertEqual(
+                (Path(result["backup_path"]) / "VERSION").read_text().strip(),
+                "1.0.0",
+            )
+
     def test_full_update_uses_tagged_candidate_then_can_roll_back(self):
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory)

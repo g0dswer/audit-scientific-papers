@@ -477,6 +477,7 @@ def activate_candidate(
             parent,
             f".{update_check.SKILL_NAME}.backup-{installed_version}-{timestamp}-",
         )
+        bookkeeping_warning = None
         try:
             backup_digest = tree_digest(root)
             recovery_state = {
@@ -510,7 +511,14 @@ def activate_candidate(
                 os.replace(backup, root)
                 raise
             recovery_state["phase"] = "activated"
-            _write_lock_metadata(lock_descriptor, recovery_state)
+            try:
+                _write_lock_metadata(lock_descriptor, recovery_state)
+            except (OSError, UpdateInstallError) as metadata_exc:
+                bookkeeping_warning = (
+                    "The update is active, but final lock metadata could not be marked "
+                    f"activated: {metadata_exc}. The fsynced prepared recovery record "
+                    "and installed rollback state remain available."
+                )
         except BaseException as exc:
             if not root.exists() and backup.exists():
                 try:
@@ -530,12 +538,15 @@ def activate_candidate(
                     parent,
                     f".{update_check.SKILL_NAME}.stage-",
                 )
-    return {
+    result = {
         "installed_path": str(root),
         "backup_path": str(backup),
         "previous_version": installed_version,
         "installed_version": available_version,
     }
+    if bookkeeping_warning is not None:
+        result["bookkeeping_warning"] = bookkeeping_warning
+    return result
 
 
 def rollback(skill_root: Path) -> dict[str, str]:
@@ -736,6 +747,8 @@ def _emit(payload: dict[str, Any], as_json: bool) -> None:
             f"to {payload['installed_version']}."
         )
         print(f"Rollback copy: {payload['backup_path']}")
+        if payload.get("bookkeeping_warning"):
+            print(f"Warning: {payload['bookkeeping_warning']}")
         print("Reload SKILL.md before beginning the audit.")
     elif payload.get("status") == "rolled_back":
         print(f"Restored Audit Scientific Papers {payload['restored_version']}.")
