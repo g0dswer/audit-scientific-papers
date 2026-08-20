@@ -198,14 +198,14 @@ def _fisher_exact_two_sided(e1: int, n1: int, e0: int, n0: int) -> float | None:
     except ModuleNotFoundError as error:
         # Do not mask a missing transitive dependency (for example numpy) or
         # any other import problem as if SciPy simply were not installed.
-        if error.name == "scipy" or (error.name and error.name.startswith("scipy.")):
+        if error.name == "scipy":
             return None
         raise
     except ImportError as error:
         # A genuine missing SciPy package can be reported as ImportError by a
         # custom importer.  Import errors from an installed/broken package are
         # deliberately not swallowed.
-        if error.name == "scipy" or (error.name and error.name.startswith("scipy.")):
+        if error.name == "scipy":
             return None
         raise
 

@@ -86,6 +86,21 @@ class FisherOptionalDependencyRegressionTests(unittest.TestCase):
         with patch("builtins.__import__", side_effect=block_scipy):
             self.assertIsNone(_fisher_exact_two_sided(15, 100, 5, 100))
 
+    def test_missing_internal_scipy_module_is_not_treated_as_optional_absence(self):
+        real_import = builtins.__import__
+
+        def break_installed_scipy(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "scipy.stats":
+                raise ModuleNotFoundError(
+                    "No module named 'scipy._lib'",
+                    name="scipy._lib",
+                )
+            return real_import(name, globals, locals, fromlist, level)
+
+        with patch("builtins.__import__", side_effect=break_installed_scipy):
+            with self.assertRaisesRegex(ModuleNotFoundError, "scipy._lib"):
+                _fisher_exact_two_sided(15, 100, 5, 100)
+
     def test_fisher_calculation_failure_is_not_silently_downgraded(self):
         scipy = types.ModuleType("scipy")
         stats = types.ModuleType("scipy.stats")
