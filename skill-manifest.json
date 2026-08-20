@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "skill": "audit-scientific-papers",
+  "repository": "g0dswer/audit-scientific-papers",
+  "channel": "stable",
+  "version": "1.0.0",
+  "tag": "v1.0.0",
+  "minimum_updater_protocol": 1,
+  "published_at": "2026-08-20",
+  "summary": "Bootstrap release for consent-based stable update checks.",
+  "changes": [
+    "Check for a newer stable version before an audit begins.",
+    "Ask for explicit consent before downloading or replacing skill files.",
+    "Bind consent to an exact release commit and install only after non-executing validation.",
+    "Retain the previous installation for rollback after an ordinary activation failure."
+  ]
+}
