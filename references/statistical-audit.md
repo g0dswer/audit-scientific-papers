@@ -147,8 +147,23 @@ python3 scripts/verify_continuous_result.py changes BT ET BC EC --adjusted-estim
 python3 scripts/verify_continuous_result.py standardized MEAN_DIFFERENCE DENOMINATOR_SD N_TREATMENT N_CONTROL --degrees-of-freedom DF --reported-effect VALUE --reported-metric hedges_g --tolerance 0.1 --json
 ```
 
-Exactly one of `--measure` or `--scale` is **required**, with no default on either: the
-command fails rather than guess.
+When the estimate is already a row in an extracted dataset, prefer the `row` subcommand:
+
+```bash
+python3 scripts/verify_continuous_result.py row meta_data.csv STUDY_ID --analysis-id POOL --json
+```
+
+`row` reads the effect, interval, effect measure, and source interval level from the row,
+so no value is retyped and the analysis scale is inherited from the `measure` column that
+was already traced to the original report. It reports the row's citation, source location,
+and outcome/exposure provenance next to the reconstruction, and prints a `PROVENANCE`
+line when either provenance is not `DIRECT` or `DERIVED_VALID`. A `study_id` that appears
+in more than one pool requires `--analysis-id`; a `study_id` that is duplicated *within* a
+pool is refused outright, because there is no defensible way to guess which row was meant.
+Use `--confidence` only to override an interval level the dataset does not record.
+
+For an estimate that is not in a dataset, exactly one of `--measure` or `--scale` is
+**required**, with no default on either: the command fails rather than guess.
 
 `--measure` is the preferred form. It takes the effect measure exactly as the source
 reports it — `HR`, `RR`, `OR`, `IRR`, `RATIO`, `MD`, `SMD` — and derives the analysis

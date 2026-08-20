@@ -4,6 +4,7 @@ import json
 import math
 import subprocess
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -31,6 +32,7 @@ from verify_continuous_result import (  # noqa: E402
     check_change_means,
     check_standardized_effect,
     reconstruct_from_ci,
+    reconstruct_from_row,
 )
 
 
@@ -633,6 +635,106 @@ class ContinuousResultTests(unittest.TestCase):
         self.assertEqual(result["scale"], "linear")
         self.assertIsNotNone(result["scale_warning"])
         self.assertIn("--scale ratio", result["scale_warning"])
+
+    def test_row_reads_measure_and_interval_from_the_dataset(self):
+        fixture = str(
+            Path(__file__).resolve().parent.parent
+            / "tests" / "fixtures" / "naghshi_2020_mortality.csv"
+        )
+        result = reconstruct_from_row(fixture, "Song_2016", analysis_id="total_all_cause")
+
+        # Nothing was retyped: the scale came from the row's own measure.
+        self.assertEqual(result["measure"], "HR")
+        self.assertEqual(result["scale"], "ratio")
+        self.assertEqual(result["scale_source"], "row_measure")
+        self.assertEqual(result["null_value"], 1.0)
+        self.assertEqual(result["row"]["study_id"], "Song_2016")
+        self.assertEqual(result["row"]["analysis_id"], "total_all_cause")
+
+        # This is exactly the row the heuristic cannot flag, and reading it
+        # from the dataset gets it right with no scale decision at all.
+        self.assertAlmostEqual(result["z_statistic_approx"], -0.969577, delta=1e-5)
+        self.assertAlmostEqual(result["p_two_sided_approx"], 0.332257, delta=1e-5)
+
+        typed = reconstruct_from_ci(0.98, 0.94, 1.02, measure="HR")
+        self.assertEqual(result["z_statistic_approx"], typed["z_statistic_approx"])
+        self.assertEqual(result["p_two_sided_approx"], typed["p_two_sided_approx"])
+
+    def test_row_surfaces_provenance_and_resolves_the_interval_level(self):
+        fixture = str(
+            Path(__file__).resolve().parent.parent
+            / "tests" / "fixtures" / "naghshi_2020_mortality.csv"
+        )
+        flagged = reconstruct_from_row(
+            fixture, "Sauvaget_2004", analysis_id="total_all_cause"
+        )
+        self.assertTrue(flagged["provenance_warnings"])
+        self.assertIn(
+            "DERIVED_INVALID_OR_UNJUSTIFIED", flagged["provenance_warnings"][0]
+        )
+        clean = reconstruct_from_row(fixture, "Song_2016", analysis_id="total_all_cause")
+        self.assertEqual(clean["provenance_warnings"], [])
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "levels.csv"
+            path.write_text(
+                "analysis_id,study_id,citation,cohort_id,effect,lower,upper,measure,"
+                "outcome_provenance,exposure_provenance,input_confidence\n"
+                "p,a90,A 2020,a90,0.80,0.68,0.94,HR,DIRECT,DIRECT,0.90\n"
+                "p,b95,B 2020,b95,0.80,0.68,0.94,HR,DIRECT,DIRECT,\n",
+                encoding="utf-8",
+            )
+            per_row = reconstruct_from_row(str(path), "a90")
+            fallback = reconstruct_from_row(str(path), "b95")
+            override = reconstruct_from_row(str(path), "a90", confidence=0.99)
+
+        self.assertEqual(per_row["confidence"], 0.90)
+        self.assertEqual(per_row["row"]["input_confidence_source"], "row")
+        self.assertEqual(fallback["confidence"], 0.95)
+        self.assertEqual(fallback["row"]["input_confidence_source"], "default")
+        self.assertEqual(override["confidence"], 0.99)
+        self.assertEqual(override["row"]["input_confidence_source"], "override")
+        # Identical printed bounds at different levels must not reconstruct
+        # the same standard error.
+        self.assertGreater(
+            per_row["standard_error_approx"], fallback["standard_error_approx"]
+        )
+
+    def test_row_refuses_an_ambiguous_or_missing_study_id(self):
+        fixture = str(
+            Path(__file__).resolve().parent.parent
+            / "tests" / "fixtures" / "naghshi_2020_mortality.csv"
+        )
+        with self.assertRaisesRegex(ValueError, "more than one analysis"):
+            reconstruct_from_row(fixture, "Song_2016")
+        with self.assertRaisesRegex(ValueError, "no row with study_id"):
+            reconstruct_from_row(fixture, "Not_A_Study")
+
+        missing = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "verify_continuous_result.py"),
+                "row", fixture, "Song_2016",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("--analysis-id", missing.stderr)
+
+        ok = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "verify_continuous_result.py"),
+                "row", fixture, "Song_2016", "--analysis-id", "total_all_cause",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("read from the dataset, not retyped", ok.stdout)
+        self.assertIn("Null value: 1", ok.stdout)
 
     def test_ratio_cli_reports_both_scales_and_json_carries_the_warning(self):
         ratio_text = subprocess.run(

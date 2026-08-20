@@ -133,6 +133,10 @@ python3 scripts/calculate_binary_effects.py 16 41 12 39 --harm --json
 # Consistency checks on a published estimate and interval
 python3 scripts/verify_continuous_result.py ci -4.04 -6.89 -1.18 --measure MD --json
 python3 scripts/verify_continuous_result.py ci 0.75 0.60 0.94 --measure HR --json
+
+# Check one extracted row without retyping its numbers or its measure
+python3 scripts/verify_continuous_result.py row meta_data.csv STUDY_ID \
+  --analysis-id primary_pool --json
 ```
 
 Use `--allow-mixed-estimands` only when the published forest plot itself mixed native
@@ -159,9 +163,11 @@ the reconstructed study variances.
   no default, because a hazard, odds, or risk ratio sent down the linear path gets a badly
   wrong p-value and a spurious interval asymmetry. Prefer `--measure`: it is the vocabulary
   the source and the extraction schema already use, so the scale follows from an audited
-  field instead of a judgement call. A heuristic also warns when an input looks like an
-  unlogged ratio, but it is a second net: it cannot detect a ratio close to the null with a
-  narrow interval, which is exactly the shape of the largest cohort studies.
+  field instead of a judgement call. Better still, `row` reads an extracted dataset and
+  takes the effect, interval, measure, and interval level from the row itself, so nothing
+  is retyped. A heuristic also warns when an input looks like an unlogged ratio, but it is
+  a second net: it cannot detect a ratio close to the null with a narrow interval, which is
+  exactly the shape of the largest cohort studies.
 - **Event direction is explicit.** `calculate_binary_effects.py` takes `--harm` or
   `--benefit`; if neither is given it assumes a beneficial event and says so prominently,
   because the assumption inverts NNT and NNH labels.

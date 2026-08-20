@@ -105,6 +105,22 @@ python3 scripts/verify_continuous_result.py ci ESTIMATE LOWER UPPER --measure MD
 python3 scripts/verify_continuous_result.py ci ESTIMATE LOWER UPPER --measure HR --json
 ```
 
+When the estimate already exists as a row in an extracted dataset, check it straight from
+the row instead of retyping anything:
+
+```bash
+python3 scripts/verify_continuous_result.py row meta_data.csv STUDY_ID \
+  --analysis-id HEADLINE_POOL --json
+```
+
+`row` takes the effect, interval, effect measure, and source interval level from the row
+itself, so the analysis scale is inherited from the audited `measure` column rather than
+chosen again by hand. It echoes the row's citation, source location, and outcome
+provenance alongside the reconstruction, and flags a row whose outcome or exposure
+provenance is not direct or validly derived. Pass `--analysis-id` when a study appears in
+more than one pool; the command refuses an ambiguous or duplicated identifier rather than
+picking a row for you. Prefer `row` over `ci` whenever the dataset exists.
+
 **Name the effect measure. Exactly one of `--measure` or `--scale` is required and
 neither has a default; the command fails rather than guess.** Prefer `--measure`, which
 takes the measure as the source reports it — `HR`, `RR`, `OR`, `IRR`, `RATIO`, `MD`,

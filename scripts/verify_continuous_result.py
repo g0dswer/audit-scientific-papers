@@ -50,8 +50,9 @@ _LOG_SYMMETRY_FRACTION = 0.25
 
 
 # Mirrors the effect-measure vocabulary of reconstruct_meta_analysis.py; a test
-# asserts the two stay identical. Kept local so this calculator remains a
-# standalone single-study tool with no runtime import of the meta engine.
+# asserts the two stay identical. Kept local so the estimate/interval paths stay
+# standalone: only the ``row`` subcommand, which reads an extracted dataset,
+# imports the meta engine, and it does so lazily.
 RATIO_MEASURES = {"HR", "RR", "OR", "IRR", "RATIO"}
 LINEAR_MEASURES = {"MD", "SMD"}
 
@@ -294,6 +295,106 @@ def reconstruct_from_ci(
     }
 
 
+def reconstruct_from_row(
+    dataset: str,
+    study_id: str,
+    *,
+    analysis_id: str | None = None,
+    confidence: float | None = None,
+) -> dict[str, Any]:
+    """Reconstruct one row of an extracted dataset, reading its own metadata.
+
+    Nothing about the estimate is retyped.  The effect, interval, effect
+    measure, and source interval level all come from the row, which has
+    already been traced to the original report and validated by the same
+    loader the pooling engine uses.  That removes the last place where the
+    analysis scale depended on the auditor transcribing a measure correctly.
+
+    ``confidence`` overrides the row's interval level and is for a source that
+    prints a level the dataset does not record; leave it unset to use the
+    row's own ``input_confidence``, or the 0.95 default when the column is
+    absent or blank.
+    """
+
+    # Imported here so the estimate/interval paths stay dependency-free.
+    from reconstruct_meta_analysis import MetaAnalysisError, load_records
+
+    try:
+        records = load_records(dataset)
+    except MetaAnalysisError as error:
+        raise ValueError(f"could not load {dataset}: {error}") from error
+
+    matches = [
+        record
+        for record in records
+        if record.study_id == study_id
+        and (analysis_id is None or record.analysis_id == analysis_id)
+    ]
+    if not matches:
+        scope = f" in analysis {analysis_id!r}" if analysis_id else ""
+        available = sorted({record.study_id for record in records})
+        raise ValueError(
+            f"no row with study_id {study_id!r}{scope}; the dataset has "
+            f"{', '.join(available)}"
+        )
+    if len(matches) > 1:
+        pools = sorted({record.analysis_id for record in matches})
+        if len(pools) > 1:
+            raise ValueError(
+                f"study_id {study_id!r} appears in more than one analysis "
+                f"({', '.join(pools)}); pass --analysis-id to choose one"
+            )
+        raise ValueError(
+            f"study_id {study_id!r} occurs {len(matches)} times in analysis "
+            f"{pools[0]!r}; the identifier is not unique, so the intended row "
+            "cannot be selected. Resolve the duplicate in the dataset first"
+        )
+
+    record = matches[0]
+    row_confidence = confidence if confidence is not None else record.input_confidence
+    result = reconstruct_from_ci(
+        record.effect,
+        record.lower,
+        record.upper,
+        confidence=0.95 if row_confidence is None else row_confidence,
+        measure=record.measure,
+    )
+    result["row"] = {
+        "analysis_id": record.analysis_id,
+        "study_id": record.study_id,
+        "citation": record.citation,
+        "cohort_id": record.cohort_id,
+        "measure": record.measure,
+        "sex": record.sex,
+        "outcome_reported_originally": record.outcome_reported_originally,
+        "outcome_used_in_meta_analysis": record.outcome_used_in_meta_analysis,
+        "outcome_provenance": record.outcome_provenance,
+        "exposure_provenance": record.exposure_provenance,
+        "source_location": record.source_location,
+        "source_url": record.source_url,
+        "notes": record.notes,
+        "input_confidence_source": (
+            "override"
+            if confidence is not None
+            else "row" if record.input_confidence is not None else "default"
+        ),
+    }
+    result["scale_source"] = "row_measure"
+    provenance_warnings = []
+    if record.outcome_provenance not in {"DIRECT", "DERIVED_VALID"}:
+        provenance_warnings.append(
+            f"Outcome provenance is {record.outcome_provenance}: this row's outcome "
+            "is not a direct or validly derived measurement of the pooled definition."
+        )
+    if record.exposure_provenance not in {"DIRECT", "DERIVED_VALID"}:
+        provenance_warnings.append(
+            f"Exposure provenance is {record.exposure_provenance}: this row's exposure "
+            "contrast is not a direct or validly derived match."
+        )
+    result["provenance_warnings"] = provenance_warnings
+    return result
+
+
 def check_change_means(
     baseline_t: float,
     endpoint_t: float,
@@ -497,6 +598,31 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     ci_parser.add_argument("--json", action="store_true", help="emit JSON")
 
+    row_parser = subparsers.add_parser(
+        "row",
+        help=(
+            "reconstruct one row of an extracted dataset, taking its effect, "
+            "interval, measure, and interval level from the row itself"
+        ),
+    )
+    row_parser.add_argument("dataset")
+    row_parser.add_argument("study_id")
+    row_parser.add_argument(
+        "--analysis-id",
+        default=None,
+        help="required when the study_id appears in more than one pool",
+    )
+    row_parser.add_argument(
+        "--confidence",
+        type=float,
+        default=None,
+        help=(
+            "override the row's source interval level; omit to use the row's "
+            "input_confidence, or 0.95 when that column is absent"
+        ),
+    )
+    row_parser.add_argument("--json", action="store_true", help="emit JSON")
+
     changes_parser = subparsers.add_parser(
         "changes", help="check raw changes and an optional adjusted estimate"
     )
@@ -523,6 +649,24 @@ def _build_parser() -> argparse.ArgumentParser:
     standardized_parser.add_argument("--json", action="store_true", help="emit JSON")
 
     return parser
+
+
+def _print_row_header(result: dict[str, Any]) -> None:
+    row = result["row"]
+    print(f"Row: {row['study_id']} in analysis {row['analysis_id']}")
+    print(f"Citation: {row['citation']}" + (f" ({row['sex']})" if row["sex"] else ""))
+    print(f"Measure as reported: {row['measure']} (read from the dataset, not retyped)")
+    if row["outcome_reported_originally"] or row["outcome_used_in_meta_analysis"]:
+        print(
+            f"Outcome originally reported: {row['outcome_reported_originally'] or 'not recorded'}"
+            f"; used as: {row['outcome_used_in_meta_analysis'] or 'not recorded'}"
+        )
+    print(
+        f"Source interval level: {result['confidence']:.0%} "
+        f"(from {row['input_confidence_source']})"
+    )
+    if row["source_location"] or row["source_url"]:
+        print(f"Source: {row['source_location']} {row['source_url']}".strip())
 
 
 def _print_ci(result: dict[str, Any]) -> None:
@@ -622,6 +766,13 @@ def main(argv: list[str] | None = None) -> int:
                 scale=args.scale,
                 measure=args.measure,
             )
+        elif args.command == "row":
+            result = reconstruct_from_row(
+                args.dataset,
+                args.study_id,
+                analysis_id=args.analysis_id,
+                confidence=args.confidence,
+            )
         else:
             if args.command == "changes":
                 result = check_change_means(
@@ -647,8 +798,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.json:
         print(json.dumps(result, ensure_ascii=False, allow_nan=False, sort_keys=True))
-    elif args.command == "ci":
+    elif args.command in ("ci", "row"):
+        if args.command == "row":
+            _print_row_header(result)
         _print_ci(result)
+        for warning in result.get("provenance_warnings", []):
+            print(f"PROVENANCE: {warning}")
     elif args.command == "changes":
         _print_changes(result)
     else:
