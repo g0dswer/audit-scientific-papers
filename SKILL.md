@@ -104,18 +104,21 @@ For a published continuous estimate and confidence interval, run:
 python3 scripts/verify_continuous_result.py ci ESTIMATE LOWER UPPER --scale linear --json
 ```
 
-**Choose the scale deliberately.** `--scale linear` tests the estimate against a null of
-zero and is correct for mean differences and other additive contrasts. A ratio measure —
-hazard ratio, odds ratio, risk ratio, incidence-rate ratio — has a null of one and must be
-analyzed on the log scale:
+**`--scale` is required and has no default; the command fails rather than guess.**
+`--scale linear` tests the estimate against a null of zero and is correct for mean
+differences and other additive contrasts. A ratio measure — hazard ratio, odds ratio, risk
+ratio, incidence-rate ratio — has a null of one and must be analyzed on the log scale:
 
 ```bash
 python3 scripts/verify_continuous_result.py ci RATIO LOWER UPPER --scale ratio --json
 ```
 
 Passing a ratio to the linear path produces a badly wrong p-value and a spurious interval
-asymmetry. The tool warns when the input has the signature of a ratio, but the warning is
-a safety net, not a substitute for identifying the effect measure yourself.
+asymmetry. Identify the effect measure from the source before running the command. The
+tool also warns when an input has the signature of an unlogged ratio, but that warning is
+a second net only: it cannot fire on a ratio close to the null with a narrow interval, such
+as HR 0.98 (0.94 to 1.02), where the linear path still returns a z of 48 against a true
+value near −1.
 
 For group baseline and endpoint means, run:
 

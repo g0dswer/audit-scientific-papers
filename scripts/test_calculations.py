@@ -508,7 +508,7 @@ class ContinuousResultTests(unittest.TestCase):
             reconstruct_from_ci(0.75, 0.60, 0.94, scale="log")
 
     def test_linear_path_is_unchanged_and_states_its_null(self):
-        result = reconstruct_from_ci(-4.04, -6.89, -1.18)
+        result = reconstruct_from_ci(-4.04, -6.89, -1.18, scale="linear")
 
         self.assertEqual(result["scale"], "linear")
         self.assertEqual(result["analysis_scale"], "identity")
@@ -520,7 +520,7 @@ class ContinuousResultTests(unittest.TestCase):
         self.assertIn("null of 0", result["scale_note"])
 
     def test_linear_path_warns_when_the_input_looks_like_a_ratio(self):
-        warned = reconstruct_from_ci(0.75, 0.60, 0.94)
+        warned = reconstruct_from_ci(0.75, 0.60, 0.94, scale="linear")
         self.assertIsNotNone(warned["scale_warning"])
         self.assertIn("--scale ratio", warned["scale_warning"])
         # The heuristic only warns: the linear numbers are untouched.
@@ -533,7 +533,40 @@ class ContinuousResultTests(unittest.TestCase):
             (2.0, 1.0, 3.0),  # symmetric on the linear scale
         ):
             with self.subTest(values=values):
-                self.assertIsNone(reconstruct_from_ci(*values)["scale_warning"])
+                self.assertIsNone(reconstruct_from_ci(*values, scale="linear")["scale_warning"])
+
+    def test_scale_is_mandatory_because_the_warning_cannot_catch_every_ratio(self):
+        # No default is allowed on either the CLI or the Python entry point.
+        # The heuristic is a second net, not the primary defence: a ratio close
+        # to the null with a narrow interval is near-symmetric on both scales,
+        # so nothing can fire, yet the linear path is badly wrong.
+        missing = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "verify_continuous_result.py"),
+                "ci",
+                "0.98",
+                "0.94",
+                "1.02",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("--scale", missing.stderr)
+
+        with self.assertRaises(TypeError):
+            reconstruct_from_ci(0.98, 0.94, 1.02)  # type: ignore[call-arg]
+
+        # The undetectable case: no warning is possible, and the two scales
+        # disagree by roughly fifty standard errors.
+        linear = reconstruct_from_ci(0.98, 0.94, 1.02, scale="linear")
+        ratio = reconstruct_from_ci(0.98, 0.94, 1.02, scale="ratio")
+        self.assertIsNone(linear["scale_warning"])
+        self.assertGreater(linear["absolute_z_statistic_approx"], 40.0)
+        self.assertLess(ratio["absolute_z_statistic_approx"], 1.5)
+        self.assertAlmostEqual(ratio["p_two_sided_approx"], 0.332, delta=0.01)
 
     def test_ratio_cli_reports_both_scales_and_json_carries_the_warning(self):
         ratio_text = subprocess.run(
@@ -567,6 +600,8 @@ class ContinuousResultTests(unittest.TestCase):
                 "0.75",
                 "0.60",
                 "0.94",
+                "--scale",
+                "linear",
             ],
             check=True,
             capture_output=True,
@@ -585,6 +620,8 @@ class ContinuousResultTests(unittest.TestCase):
                     "0.75",
                     "0.60",
                     "0.94",
+                    "--scale",
+                    "linear",
                     "--json",
                 ],
                 check=True,
@@ -596,7 +633,7 @@ class ContinuousResultTests(unittest.TestCase):
         self.assertEqual(linear_json["null_value"], 0.0)
 
     def test_reconstructs_approximate_se_statistics_and_asymmetry(self):
-        result = reconstruct_from_ci(-4.04, -6.89, -1.18)
+        result = reconstruct_from_ci(-4.04, -6.89, -1.18, scale="linear")
 
         self.assertAlmostEqual(result["standard_error_approx"], 1.456659, places=5)
         self.assertAlmostEqual(result["standard_error_lower_approx"], 1.454108, places=5)
@@ -608,11 +645,11 @@ class ContinuousResultTests(unittest.TestCase):
         self.assertTrue(result["approximate"])
 
     def test_reconstructs_nonstandard_confidence_and_reports_ci_asymmetry(self):
-        nonstandard = reconstruct_from_ci(-4.04, -6.89, -1.18, confidence=0.90)
+        nonstandard = reconstruct_from_ci(-4.04, -6.89, -1.18, confidence=0.90, scale="linear")
         self.assertAlmostEqual(nonstandard["critical_value_approx"], 1.644854, places=5)
         self.assertEqual(nonstandard["confidence"], 0.90)
 
-        asymmetric = reconstruct_from_ci(10.0, 8.0, 15.0)
+        asymmetric = reconstruct_from_ci(10.0, 8.0, 15.0, scale="linear")
         self.assertGreater(asymmetric["standard_error_upper_approx"], asymmetric["standard_error_lower_approx"])
         self.assertGreater(asymmetric["asymmetry_approx"], 0.0)
         self.assertAlmostEqual(asymmetric["asymmetry_ratio_approx"], 2.5, places=12)
@@ -626,6 +663,8 @@ class ContinuousResultTests(unittest.TestCase):
                 "-4.04",
                 "-6.89",
                 "-1.18",
+                "--scale",
+                "linear",
                 "--confidence",
                 "0.90",
             ],
@@ -648,12 +687,12 @@ class ContinuousResultTests(unittest.TestCase):
         for values in invalid:
             with self.subTest(values=values):
                 with self.assertRaises(ValueError):
-                    reconstruct_from_ci(*values)
+                    reconstruct_from_ci(*values, scale="linear")
 
         for confidence in (0.0, 1.0, float("nan"), float("inf")):
             with self.subTest(confidence=confidence):
                 with self.assertRaises(ValueError):
-                    reconstruct_from_ci(-1.0, -2.0, 0.0, confidence=confidence)
+                    reconstruct_from_ci(-1.0, -2.0, 0.0, confidence=confidence, scale="linear")
 
     def test_check_change_means_reports_raw_contrast_and_estimand_difference(self):
         result = check_change_means(41.54, 34.98, 39.51, 37.26, -4.04)
@@ -822,6 +861,8 @@ class ContinuousResultTests(unittest.TestCase):
                 "-4.04",
                 "-6.89",
                 "-1.18",
+                "--scale",
+                "linear",
                 "--json",
             ],
             check=True,

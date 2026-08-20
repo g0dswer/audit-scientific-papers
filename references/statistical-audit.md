@@ -146,9 +146,9 @@ python3 scripts/verify_continuous_result.py changes BT ET BC EC --adjusted-estim
 python3 scripts/verify_continuous_result.py standardized MEAN_DIFFERENCE DENOMINATOR_SD N_TREATMENT N_CONTROL --degrees-of-freedom DF --reported-effect VALUE --reported-metric hedges_g --tolerance 0.1 --json
 ```
 
-`--scale` is mandatory to get right, and the default is `linear`. The linear path is for
-difference measures (mean differences, risk differences) and tests the estimate against a
-null of **0** on the reported scale. Ratio measures — hazard ratios, odds ratios, risk
+`--scale` is a **required** argument with no default: the command fails rather than guess.
+The linear path is for difference measures (mean differences, risk differences) and tests
+the estimate against a null of **0** on the reported scale. Ratio measures — hazard ratios, odds ratios, risk
 ratios, rate ratios, and any other multiplicative estimate — must **never** be passed to
 the linear path: their null is 1, not 0, and their intervals are symmetric only after
 logging. Sending a ratio through the linear path fabricates two false findings at once, a
@@ -172,6 +172,15 @@ scale, and the log-scale departure from symmetry is at most a quarter of the lin
 the output emits a `scale_warning` in both the text and the JSON naming `--scale ratio`.
 The warning never changes a computed number; treat it as a prompt to confirm the measure
 type, and re-run on the ratio path if the estimate is multiplicative.
+
+**The guard is a second net, not the primary defence.** It cannot fire on a ratio close to
+the null with a narrow interval, because such an interval is very nearly symmetric on both
+scales. Against the 38 ratio rows of the repository's own Naghshi 2020 fixture the guard
+misses six, including HR 0.98 (0.94 to 1.02) and HR 1.00 (0.98 to 1.02) — the shape of the
+largest and most heavily weighted cohort studies, and the rows whose weight most influences
+a pooled result. On HR 0.98 (0.94 to 1.02) the linear path reports `z = 48.02` where the
+truth is `z = -0.97`, with no warning available. That is why `--scale` is required rather
+than defaulted: identify the effect measure yourself, every time.
 
 Values reconstructed from an interval are approximate. Do not infer degrees of freedom,
 the exact model, or the published p-value from a confidence interval alone. Inspect

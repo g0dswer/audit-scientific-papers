@@ -154,9 +154,12 @@ the reconstructed study variances.
 - **`--model fixed` is honoured across the whole sensitivity ladder.** Rungs that are
   meaningful only for random effects report `NOT_ASSESSABLE` rather than publishing
   random-effects numbers under a fixed-effect heading.
-- **Ratio measures must be analyzed on the log scale.** The continuous checker takes an
-  explicit `--scale {linear,ratio}`; a hazard, odds, or risk ratio sent down the linear
-  path gets a badly wrong p-value, so the tool warns when it detects that signature.
+- **Ratio measures must be analyzed on the log scale.** `--scale {linear,ratio}` is a
+  required argument on the continuous checker, with no default, because a hazard, odds, or
+  risk ratio sent down the linear path gets a badly wrong p-value and a spurious interval
+  asymmetry. A heuristic also warns when an input looks like an unlogged ratio, but it is a
+  second net: it cannot detect a ratio close to the null with a narrow interval, which is
+  exactly the shape of the largest cohort studies.
 - **Event direction is explicit.** `calculate_binary_effects.py` takes `--harm` or
   `--benefit`; if neither is given it assumes a beneficial event and says so prominently,
   because the assumption inverts NNT and NNH labels.

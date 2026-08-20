@@ -112,7 +112,8 @@ def reconstruct_from_ci(
     lower: float,
     upper: float,
     confidence: float = 0.95,
-    scale: str = "linear",
+    *,
+    scale: str,
 ) -> dict[str, Any]:
     """Reconstruct approximate SE, normal statistic, and two-sided p-value.
 
@@ -121,13 +122,22 @@ def reconstruct_from_ci(
 
         SE ~= ((estimate - lower) + (upper - estimate)) / (2 * z_critical)
 
-    With ``scale="linear"`` (the default) the estimate is a difference measure
-    and is tested against a null of 0 on the reported scale.  With
-    ``scale="ratio"`` the estimate is a ratio measure (hazard ratio, odds
-    ratio, risk ratio), all three values must be strictly positive, the
-    reconstruction is performed on the natural-log scale, and the null value
-    is 1.  Ratio measures must never be sent through the linear path: their
-    null is not 0 and their intervals are symmetric only after logging.
+    ``scale`` is required and has no default.  With ``scale="linear"`` the
+    estimate is a difference measure and is tested against a null of 0 on the
+    reported scale.  With ``scale="ratio"`` the estimate is a ratio measure
+    (hazard ratio, odds ratio, risk ratio), all three values must be strictly
+    positive, the reconstruction is performed on the natural-log scale, and
+    the null value is 1.  Ratio measures must never be sent through the linear
+    path: their null is not 0 and their intervals are symmetric only after
+    logging.
+
+    There is no default because the heuristic in ``_ratio_scale_warning``
+    cannot catch every mislabeled ratio.  A ratio close to the null with a
+    narrow interval -- HR 0.98 (0.94 to 1.02), the shape of the largest and
+    most heavily weighted cohort studies -- is very nearly symmetric on both
+    scales, so no warning can fire, yet the linear path reports z = 48 where
+    the truth is z = -0.97.  Forcing the caller to name the scale replaces a
+    silent default with a decision the caller has to make.
 
     This deliberately uses a normal approximation and does not infer degrees
     of freedom or claim exact reproduction of the published model.
@@ -427,11 +437,13 @@ def _build_parser() -> argparse.ArgumentParser:
     ci_parser.add_argument(
         "--scale",
         choices=("linear", "ratio"),
-        default="linear",
+        required=True,
         help=(
-            "linear for difference measures tested against a null of 0 "
-            "(default); ratio for hazard, odds, or risk ratios, which are "
-            "analysed on the log scale against a null of 1"
+            "required: linear for difference measures tested against a null "
+            "of 0; ratio for hazard, odds, or risk ratios, which are analysed "
+            "on the log scale against a null of 1. There is deliberately no "
+            "default, because the wrong scale silently produces a wrong "
+            "p-value and a spurious interval asymmetry"
         ),
     )
     ci_parser.add_argument("--json", action="store_true", help="emit JSON")
