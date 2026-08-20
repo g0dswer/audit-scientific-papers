@@ -66,7 +66,7 @@ def download_archive(commit: str, timeout: float = 30.0) -> bytes:
         headers={"User-Agent": f"{update_check.SKILL_NAME}-updater/1"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with update_check._urlopen_verified(request, timeout=timeout) as response:
             final = urllib.parse.urlparse(response.geturl())
             if final.scheme != "https" or final.hostname not in {
                 "github.com",

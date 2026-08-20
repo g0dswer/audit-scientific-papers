@@ -66,6 +66,9 @@ the user's privileges and is not a security sandbox. Tests are a publishing gate
 maintainer, while installation uses non-executing package validation. The updater trusts
 the named GitHub repository; commit pinning prevents a release tag from changing after
 consent, but it does not protect against compromise of the repository or maintainer account.
+HTTPS certificate verification is never disabled. If a Python installation has no usable
+default CA path, the updater may retry with an installed `certifi` bundle or a known
+operating-system CA bundle while keeping hostname and certificate validation enabled.
 
 Check manually with:
 
