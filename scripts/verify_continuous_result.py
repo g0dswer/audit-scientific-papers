@@ -368,13 +368,16 @@ def reconstruct_from_row(
         "citation": record.citation,
         "cohort_id": record.cohort_id,
         "measure": record.measure,
-        # CodeQL classifies a field named `sex` as private personal data. Here it
-        # is a published subgroup label -- "all", "men", "women" -- transcribed
-        # from a forest plot, identifying which stratum of a study a row came
-        # from. This tool reads aggregate published estimates only and never
-        # holds participant-level data, so there is no personal information to
-        # disclose. Reported because a stratum is part of a row's identity.
-        "sex": record.sex,  # codeql[py/clear-text-logging-sensitive-data]
+        # Code scanning classifies any field named `sex` as private personal
+        # data and flags this row and the header print below. It is a false
+        # positive, dismissed on the repository: the value is a published
+        # subgroup label -- "all", "men", "women" -- transcribed from a forest
+        # plot to identify which stratum of a study a row came from. This tool
+        # reads aggregate published estimates only and never holds
+        # participant-level data. Inline suppression comments are not honoured
+        # by GitHub code scanning, so the dismissal lives in the security tab
+        # and this note records the reasoning next to the code.
+        "sex": record.sex,
         "outcome_reported_originally": record.outcome_reported_originally,
         "outcome_used_in_meta_analysis": record.outcome_used_in_meta_analysis,
         "outcome_provenance": record.outcome_provenance,
@@ -665,7 +668,7 @@ def _print_row_header(result: dict[str, Any]) -> None:
     print(f"Row: {row['study_id']} in analysis {row['analysis_id']}")
     # The stratum label is aggregate published metadata, not personal data; see
     # the note beside "sex" in reconstruct_from_row.
-    stratum = f" ({row['sex']})" if row["sex"] else ""  # codeql[py/clear-text-logging-sensitive-data]
+    stratum = f" ({row['sex']})" if row["sex"] else ""
     print(f"Citation: {row['citation']}{stratum}")
     print(f"Measure as reported: {row['measure']} (read from the dataset, not retyped)")
     if row["outcome_reported_originally"] or row["outcome_used_in_meta_analysis"]:
