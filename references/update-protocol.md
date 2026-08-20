@@ -61,6 +61,11 @@ a tamper boundary against another process running as the same user, which could 
 skill or backup files directly. State these boundaries if the user asks about supply-chain
 or local-tampering guarantees.
 
+TLS verification must remain enabled. A failed Python default CA path may be retried only
+with an installed `certifi` bundle or a known operating-system CA bundle through a normal
+verified SSL context. Never use an unverified context, suppress hostname checks, or advise
+the user to bypass certificate validation.
+
 Do not work around an updater refusal, test failure, permission error, missing release
 tag, unsupported updater protocol, or Git checkout. Report the reason. Continue with the
 installed version only when the updater reports both `installation_intact: true` and

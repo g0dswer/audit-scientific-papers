@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -27,6 +28,8 @@ MAX_MANIFEST_BYTES = 64 * 1024
 MAX_RELEASE_BYTES = 256 * 1024
 _RELEASE_PATH = "/repos/g0dswer/audit-scientific-papers/releases/latest"
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_TLS_CONTEXT: ssl.SSLContext | None = None
+_TLS_FALLBACK_ATTEMPTED = False
 _SEMVER_RE = re.compile(
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
     r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
@@ -181,6 +184,75 @@ def read_local_version(skill_root: Path) -> str:
     return value
 
 
+def _is_certificate_verification_error(exc: BaseException) -> bool:
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    return isinstance(reason, ssl.SSLCertVerificationError) or (
+        isinstance(reason, ssl.SSLError)
+        and "CERTIFICATE_VERIFY_FAILED" in str(reason)
+    )
+
+
+def _build_fallback_tls_context() -> ssl.SSLContext | None:
+    """Build a verified CA context without ever disabling certificate checks."""
+
+    candidates: list[Path] = []
+    try:
+        import certifi
+    except ImportError:
+        pass
+    else:
+        candidates.append(Path(certifi.where()))
+    candidates.extend(
+        Path(path)
+        for path in (
+            "/etc/ssl/cert.pem",
+            "/etc/ssl/certs/ca-certificates.crt",
+            "/etc/pki/tls/certs/ca-bundle.crt",
+        )
+    )
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        if resolved in seen or not resolved.is_file():
+            continue
+        seen.add(resolved)
+        try:
+            return ssl.create_default_context(cafile=str(resolved))
+        except (OSError, ssl.SSLError):
+            continue
+    return None
+
+
+def _urlopen_verified(request: Any, *, timeout: float):
+    """Open HTTPS with verification, retrying only a failed default CA path."""
+
+    global _TLS_CONTEXT, _TLS_FALLBACK_ATTEMPTED
+    deadline = time.monotonic() + timeout
+    if _TLS_CONTEXT is not None:
+        return urllib.request.urlopen(
+            request, timeout=timeout, context=_TLS_CONTEXT
+        )
+    try:
+        return urllib.request.urlopen(request, timeout=timeout)
+    except (urllib.error.URLError, ssl.SSLCertVerificationError) as exc:
+        if not _is_certificate_verification_error(exc):
+            raise
+        if not _TLS_FALLBACK_ATTEMPTED:
+            _TLS_FALLBACK_ATTEMPTED = True
+            _TLS_CONTEXT = _build_fallback_tls_context()
+        if _TLS_CONTEXT is None:
+            raise
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("TLS fallback exceeded the request deadline")
+        return urllib.request.urlopen(
+            request, timeout=remaining, context=_TLS_CONTEXT
+        )
+
+
 def _fetch_json(
     url: str,
     *,
@@ -198,7 +270,7 @@ def _fetch_json(
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _urlopen_verified(request, timeout=timeout) as response:
             final_url = response.geturl()
             parsed = urllib.parse.urlparse(final_url)
             if (

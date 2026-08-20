@@ -2,10 +2,12 @@ import io
 import contextlib
 import json
 import os
+import ssl
 import sys
 import tarfile
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -236,6 +238,73 @@ class VersionAndManifestTests(unittest.TestCase):
             result = update_check.check_for_update(root, manifest_loader=unavailable)
             self.assertEqual(result["status"], "unavailable")
             self.assertTrue(result["continue_with_installed"])
+
+    def test_certificate_failure_retries_with_verified_ca_context(self):
+        payload = {"ok": True}
+
+        class Response:
+            headers = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def geturl(self):
+                return "https://api.github.com/test"
+
+            def read(self, maximum):
+                return json.dumps(payload).encode("utf-8")
+
+        certificate_error = urllib.error.URLError(
+            ssl.SSLCertVerificationError(1, "certificate verify failed")
+        )
+        verified_context = object()
+        with mock.patch.object(update_check, "_TLS_CONTEXT", None), mock.patch.object(
+            update_check, "_TLS_FALLBACK_ATTEMPTED", False
+        ), mock.patch.object(
+            update_check,
+            "_build_fallback_tls_context",
+            return_value=verified_context,
+        ), mock.patch.object(
+            update_check.urllib.request,
+            "urlopen",
+            side_effect=[certificate_error, Response()],
+        ) as opened:
+            result = update_check._fetch_json(
+                "https://api.github.com/test",
+                expected_host="api.github.com",
+                expected_path="/test",
+                maximum=1_024,
+                timeout=5.0,
+            )
+        self.assertEqual(result, payload)
+        self.assertEqual(opened.call_count, 2)
+        self.assertIs(opened.call_args_list[1].kwargs["context"], verified_context)
+
+    def test_fallback_context_keeps_certificate_and_hostname_verification(self):
+        context = update_check._build_fallback_tls_context()
+        self.assertIsNotNone(context)
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+
+    def test_non_certificate_network_failure_is_not_retried(self):
+        failure = urllib.error.URLError("offline")
+        with mock.patch.object(update_check, "_TLS_CONTEXT", None), mock.patch.object(
+            update_check, "_TLS_FALLBACK_ATTEMPTED", False
+        ), mock.patch.object(
+            update_check.urllib.request, "urlopen", side_effect=failure
+        ) as opened:
+            with self.assertRaises(update_check.UpdateCheckError):
+                update_check._fetch_json(
+                    "https://api.github.com/test",
+                    expected_host="api.github.com",
+                    expected_path="/test",
+                    maximum=1_024,
+                    timeout=5.0,
+                )
+        self.assertEqual(opened.call_count, 1)
 
     def test_checker_error_payload_marks_corrupt_installation_unsafe(self):
         with tempfile.TemporaryDirectory() as directory:
