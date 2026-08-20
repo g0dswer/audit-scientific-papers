@@ -42,15 +42,18 @@ Install it as a managed copy without `.git` metadata if
 you want consent-based updates; keep `.git` only for a developer checkout.
 
 
-Then use:
+If you're in Work mode use:
+```text
+$audit-scientific-papers audit this study:
+
+[PASTE DOI OR URL, OR ATTACH THE PAPER]
+```
+If you're in Codex use:
 ```text
 @audit-scientific-papers audit this study:
 
 [PASTE DOI OR URL, OR ATTACH THE PAPER]
 ```
-
-If your interface supports skill mentions, select `@Audit Scientific Papers`. In Codex,
-the installed skill may be invoked as `$audit-scientific-papers`.
 
 ## Stable updates
 
