@@ -8,7 +8,19 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from reconstruct_meta_analysis import filter_records, load_records, meta_analysis
+from reconstruct_meta_analysis import (
+    PREDICTION_DF_CONVENTIONS,
+    MetaAnalysisError,
+    filter_records,
+    load_records,
+    meta_analysis,
+)
+
+
+def _format_interval(lower: float | None, upper: float | None) -> str:
+    if lower is None or upper is None:
+        return "not estimable"
+    return f"{lower:.6g} to {upper:.6g}"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -18,49 +30,61 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--common-measure")
     parser.add_argument("--direct-outcomes-only", action="store_true")
     parser.add_argument("--direct-exposures-only", action="store_true")
+    parser.add_argument("--input-confidence", type=float, default=0.95)
+    parser.add_argument("--prediction-df", choices=PREDICTION_DF_CONVENTIONS, default="k-2")
     parser.add_argument("--allow-mixed-estimands", action="store_true")
+    parser.add_argument("--allow-dependence", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
-    records = filter_records(
-        load_records(args.dataset),
-        analysis_id=args.analysis_id,
-        common_measure=args.common_measure,
-        direct_outcomes_only=args.direct_outcomes_only,
-        direct_exposures_only=args.direct_exposures_only,
-    )
     output = []
-    for method in ("DL", "PM", "REML"):
-        for inference in ("normal", "HKSJ"):
-            result = meta_analysis(
-                records,
-                tau2_method=method,
-                inference=inference,
-                allow_mixed_estimands=args.allow_mixed_estimands,
-            )
-            output.append(
-                {
-                    "tau2_method": method,
-                    "inference": inference,
-                    "pooled": result["pooled"],
-                    "ci_lower": result["ci_lower"],
-                    "ci_upper": result["ci_upper"],
-                    "prediction_lower": result["prediction_lower"],
-                    "prediction_upper": result["prediction_upper"],
-                    "tau2": result["tau2"],
-                    "I2_percent": result["I2_percent"],
-                    "measures": result["measures"],
-                    "warnings": result["warnings"],
-                }
-            )
+    try:
+        records = filter_records(
+            load_records(args.dataset),
+            analysis_id=args.analysis_id,
+            common_measure=args.common_measure,
+            direct_outcomes_only=args.direct_outcomes_only,
+            direct_exposures_only=args.direct_exposures_only,
+        )
+        for method in ("DL", "PM", "REML"):
+            for inference in ("normal", "HKSJ"):
+                result = meta_analysis(
+                    records,
+                    tau2_method=method,
+                    inference=inference,
+                    input_confidence=args.input_confidence,
+                    prediction_df=args.prediction_df,
+                    allow_mixed_estimands=args.allow_mixed_estimands,
+                    allow_dependence=args.allow_dependence,
+                )
+                output.append(
+                    {
+                        "model": result["model"],
+                        "tau2_method": method,
+                        "inference": inference,
+                        "pooled": result["pooled"],
+                        "ci_lower": result["ci_lower"],
+                        "ci_upper": result["ci_upper"],
+                        "prediction_df_convention": result["prediction_df_convention"],
+                        "prediction_interval_df": result["prediction_interval_df"],
+                        "prediction_lower": result["prediction_lower"],
+                        "prediction_upper": result["prediction_upper"],
+                        "tau2": result["tau2"],
+                        "I2_percent": result["I2_percent"],
+                        "measures": result["measures"],
+                        "warnings": result["warnings"],
+                    }
+                )
+    except (MetaAnalysisError, OSError) as exc:
+        raise SystemExit(f"error: {exc}") from exc
     if args.json:
         print(json.dumps(output, indent=2, sort_keys=True))
     else:
-        print("tau2\tinference\tpooled\tci\tprediction interval\tI2%")
+        print("model\ttau2\tinference\tpooled\tci\tprediction interval\tI2%")
         for row in output:
             print(
-                f"{row['tau2_method']}\t{row['inference']}\t{row['pooled']:.6g}\t"
+                f"{row['model']}\t{row['tau2_method']}\t{row['inference']}\t{row['pooled']:.6g}\t"
                 f"{row['ci_lower']:.6g} to {row['ci_upper']:.6g}\t"
-                f"{row['prediction_lower']:.6g} to {row['prediction_upper']:.6g}\t"
+                f"{_format_interval(row['prediction_lower'], row['prediction_upper'])}\t"
                 f"{row['I2_percent']:.2f}"
             )
             for warning in row["warnings"]:

@@ -79,7 +79,16 @@ When valid two-arm event counts exist, run:
 python3 scripts/calculate_binary_effects.py E1 N1 E0 N0 --json
 ```
 
-Add `--harm` when the event is undesirable. Inspect the event definition, time horizon, analysis population, denominator consistency, competing risks, and whether inferred counts are unique before calculating.
+State the event direction explicitly every time: `--harm` when the event is undesirable
+(death, infarction, relapse), `--benefit` when it is desirable (cure, response). If you
+pass neither, the tool assumes the event is beneficial and says so loudly in its output —
+never let that assumption pass into the report unexamined, because it inverts the NNT and
+NNH labels. Inspect the event definition, time horizon, analysis population, denominator
+consistency, competing risks, and whether inferred counts are unique before calculating.
+
+The calculator reports the risk difference with a Newcombe–Wilson interval, and the risk
+ratio and odds ratio with large-sample log-scale intervals. Undefined relative effects
+(zero cells) are returned as explicit nulls, never as hidden finite values.
 
 Mandatory output rule:
 
@@ -92,8 +101,21 @@ Do not convert a standardized continuous effect into a number needed to treat un
 For a published continuous estimate and confidence interval, run:
 
 ```bash
-python3 scripts/verify_continuous_result.py ci ESTIMATE LOWER UPPER --json
+python3 scripts/verify_continuous_result.py ci ESTIMATE LOWER UPPER --scale linear --json
 ```
+
+**Choose the scale deliberately.** `--scale linear` tests the estimate against a null of
+zero and is correct for mean differences and other additive contrasts. A ratio measure —
+hazard ratio, odds ratio, risk ratio, incidence-rate ratio — has a null of one and must be
+analyzed on the log scale:
+
+```bash
+python3 scripts/verify_continuous_result.py ci RATIO LOWER UPPER --scale ratio --json
+```
+
+Passing a ratio to the linear path produces a badly wrong p-value and a spurious interval
+asymmetry. The tool warns when the input has the signature of a ratio, but the warning is
+a safety net, not a substitute for identifying the effect measure yourself.
 
 For group baseline and endpoint means, run:
 
@@ -142,9 +164,17 @@ python3 scripts/reconstruct_meta_analysis.py meta_data.csv \
 ```
 
 Use the override only if the publication mixed ratio measures in the headline pool. Keep
-the source interval level (`--input-confidence`, default 0.95) separate from the requested
-output interval (`--confidence`). Require one `analysis_id`; never combine separate forest
-plots simply because they share a CSV.
+the source interval level (`--input-confidence`, default 0.95, overridable per row with an
+`input_confidence` column) separate from the requested output interval (`--confidence`).
+Require one `analysis_id`; never combine separate forest plots simply because they share a
+CSV.
+
+Reconstruct the published pool with the model the authors used. `--model fixed` is honoured
+throughout the sensitivity ladder, so the published-reconstruction rung reproduces the
+model the reproduction gate validated; the random-effects-only rungs report
+`NOT_ASSESSABLE` instead of quietly switching models. Prediction intervals default to the
+Cochrane `k - 2` degrees-of-freedom convention (`--prediction-df k-1` for the alternative);
+always report which convention produced the interval you quote.
 
 Do not automatically convert hazard ratios, risk ratios, and odds ratios. If compatible
 native estimates cannot be isolated, prefer separate pools or structured synthesis without
@@ -212,7 +242,8 @@ For a meta-analysis, also confirm:
 - cohort overlap and multiple correlated rows assessed;
 - adjustment-set heterogeneity assessed for observational estimates;
 - between-study variance estimator and inference method identified;
-- Hartung–Knapp–Sidik–Jonkman and prediction-interval sensitivity considered;
+- Hartung–Knapp–Sidik–Jonkman and prediction-interval sensitivity considered, with the
+  prediction-interval degrees-of-freedom convention stated;
 - leave-one-cohort-cluster-out influence analysis performed when estimable;
 - high-risk-of-bias and overlap sensitivity performed when substantively justified;
 - robustness classified as robust, directionally robust but inference-sensitive,

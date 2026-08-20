@@ -9,7 +9,13 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Sequence
 
-from reconstruct_meta_analysis import MetaAnalysisError, MetaRecord, load_records
+from reconstruct_meta_analysis import (
+    UNRESOLVED_OVERLAP_STATUSES,
+    VALID_OVERLAP_STATUSES,
+    MetaAnalysisError,
+    MetaRecord,
+    load_records,
+)
 
 
 def validate_records(records: Sequence[MetaRecord]) -> dict:
@@ -24,16 +30,9 @@ def validate_records(records: Sequence[MetaRecord]) -> dict:
         study_keys[(record.analysis_id, record.study_id)] += 1
         cohorts_by_analysis[record.analysis_id][record.cohort_id] += 1
         rows_by_analysis_cohort[(record.analysis_id, record.cohort_id)].append(record)
-        allowed_overlap_statuses = {
-            "none",
-            "resolved_independent",
-            "resolved_duplicate_removed",
-            "modeled",
-            "unknown",
-            "unresolved",
-            "possible",
-        }
-        if record.overlap_status not in allowed_overlap_statuses:
+        # The vocabulary is owned by the engine, which now rejects unknown values at
+        # load time; this check still runs for records built programmatically.
+        if record.overlap_status not in VALID_OVERLAP_STATUSES:
             issues.append(
                 {
                     "severity": "error",
@@ -97,12 +96,7 @@ def validate_records(records: Sequence[MetaRecord]) -> dict:
                     "message": f"Exposure provenance is {record.exposure_provenance}.",
                 }
             )
-        if record.participant_overlap_possible and record.overlap_status in {
-            "",
-            "unknown",
-            "unresolved",
-            "possible",
-        }:
+        if record.participant_overlap_possible and record.overlap_status in UNRESOLVED_OVERLAP_STATUSES:
             issues.append(
                 {
                     "severity": "error",

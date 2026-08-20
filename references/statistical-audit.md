@@ -140,14 +140,44 @@ time-to-event models, or other prespecified analyses.
 The continuous checker can be used as follows:
 
 ```bash
-python3 scripts/verify_continuous_result.py ci ESTIMATE LOWER UPPER --json
+python3 scripts/verify_continuous_result.py ci ESTIMATE LOWER UPPER --scale linear --json
+python3 scripts/verify_continuous_result.py ci RATIO LOWER UPPER --scale ratio --json
 python3 scripts/verify_continuous_result.py changes BT ET BC EC --adjusted-estimate VALUE --json
 python3 scripts/verify_continuous_result.py standardized MEAN_DIFFERENCE DENOMINATOR_SD N_TREATMENT N_CONTROL --degrees-of-freedom DF --reported-effect VALUE --reported-metric hedges_g --tolerance 0.1 --json
 ```
 
+`--scale` is mandatory to get right, and the default is `linear`. The linear path is for
+difference measures (mean differences, risk differences) and tests the estimate against a
+null of **0** on the reported scale. Ratio measures — hazard ratios, odds ratios, risk
+ratios, rate ratios, and any other multiplicative estimate — must **never** be passed to
+the linear path: their null is 1, not 0, and their intervals are symmetric only after
+logging. Sending a ratio through the linear path fabricates two false findings at once, a
+spuriously extreme p-value and a spurious interval asymmetry.
+
+With `--scale ratio` the estimate, lower, and upper bounds must all be strictly positive.
+The tool then computes `SE(log ratio) = (log(upper) - log(lower)) / (2*z)`, tests
+`z = log(estimate) / SE` against a null of **1**, and reports asymmetry on the log scale.
+The output labels every quantity by scale: the log-scale intermediates
+(`analysis_estimate`, `analysis_lower`, `analysis_upper`, the standard errors, and the
+asymmetry) and the back-transformed companions (`back_transformed`, including the interval
+geometric mean, which equals the reported ratio when the interval is exactly log
+symmetric). For example HR 0.75 (0.60 to 0.94) gives SE(log HR) 0.11453, z -2.512,
+p 0.012, and essentially zero log-scale asymmetry; the linear path on the same numbers
+reports p < 0.001 and a large fake asymmetry.
+
+The `null_value` field is always emitted (0 for linear, 1 for ratio) so the tested
+assumption is never invisible. The linear path also carries a heuristic guard: when the
+estimate and both bounds are positive, the interval is materially asymmetric on the linear
+scale, and the log-scale departure from symmetry is at most a quarter of the linear one,
+the output emits a `scale_warning` in both the text and the JSON naming `--scale ratio`.
+The warning never changes a computed number; treat it as a prompt to confirm the measure
+type, and re-run on the ratio path if the estimate is multiplicative.
+
 Values reconstructed from an interval are approximate. Do not infer degrees of freedom,
 the exact model, or the published p-value from a confidence interval alone. Inspect
-asymmetry and report when a normal approximation is only a plausibility check.
+asymmetry and report when a normal approximation is only a plausibility check. Judge
+asymmetry on the analysis scale: a ratio interval that is asymmetric on the linear scale
+is not a red flag, only a consequence of the log scale.
 
 The continuous checker can calculate an approximate Cohen’s d and Hedges’ g when the
 caller supplies the mean difference, denominator SD, and valid arm sample sizes:
@@ -178,8 +208,15 @@ imputation. Record covariance structure, time-by-treatment interaction, baseline
 adjustment, degrees of freedom, estimation method, and missing-data assumptions.
 
 For a reported estimate and confidence interval, compute an approximate standard error
-and normal statistic only as a consistency check. If the interval is asymmetric, retain
-separate lower- and upper-side widths and state the asymmetry. Never present an
+and normal statistic only as a consistency check. Choose the scale before the check:
+`--scale linear` for difference measures against a null of 0, `--scale ratio` for hazard,
+odds, risk, or rate ratios, which are analysed on the log scale against a null of 1.
+Passing a ratio measure to the linear path is an error, not a conservative
+approximation: it invents both a false p-value and a false asymmetry. If the interval is
+asymmetric **on the analysis scale**, retain separate lower- and upper-side widths and
+state the asymmetry; a ratio interval is expected to look asymmetric on the linear scale
+and symmetric after logging, and only log-scale asymmetry is a reportable signal. Always
+state the null value the reported p-value was tested against. Never present an
 approximate reconstruction as exact reanalysis or as an automated standardized-effect
 verification.
 
@@ -199,13 +236,25 @@ When valid two-arm counts exist, run:
 python3 scripts/calculate_binary_effects.py E1 N1 E0 N0 --json
 ```
 
-Add `--harm` for an undesirable event. Inspect definitions, time horizon, denominators,
-competing risks, and whether counts are unique before calculating.
+State the event direction explicitly on every run: `--harm` for an undesirable event
+(death, infarction, relapse) and `--benefit` for a desirable one. The two flags are
+mutually exclusive. If neither is given the calculator keeps its historical assumption
+that the event is desirable, but flags it: `event_direction_specified` is false and an
+`event_direction_notice` appears in both the text and the JSON. Never accept an
+unspecified direction in a finished audit, because it silently inverts the NNT and NNH
+labels. Inspect definitions, time horizon, denominators, competing risks, and whether
+counts are unique before calculating.
 
 The calculator reports risks, risk difference, relative effects, Newcombe--Wilson
 intervals, reciprocal effects, and an optional two-sided Fisher value of p when SciPy is
-available. It does not add a continuity correction to RR or OR. Mathematically undefined
-relative effects are explicit null values, not hidden finite estimates.
+available. Relative effects are reported with intervals, never as naked point estimates:
+`risk_ratio_ci` uses the Katz large-sample method,
+`SE(log RR) = sqrt(1/e1 - 1/n1 + 1/e0 - 1/n0)`, and `odds_ratio_ci` uses Woolf's method,
+`SE(log OR) = sqrt(1/a + 1/b + 1/c + 1/d)`; both are computed on the log scale and
+back-transformed, and both are labeled large-sample approximations. It does not add a
+continuity correction to RR or OR. Mathematically undefined relative effects — and the
+intervals of any table with a zero cell entering the standard error — are explicit null
+values, not hidden finite estimates.
 
 Number-needed-to-treat/harm rules are strict:
 

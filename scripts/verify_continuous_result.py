@@ -45,11 +45,74 @@ def _critical_value(confidence: float) -> float:
     return NormalDist().inv_cdf(0.5 + confidence / 2.0)
 
 
+_LINEAR_ASYMMETRY_TRIGGER = 0.05
+_LOG_SYMMETRY_FRACTION = 0.25
+
+
+def _validate_scale(scale: str) -> str:
+    if scale not in ("linear", "ratio"):
+        raise ValueError("scale must be 'linear' or 'ratio'")
+    return scale
+
+
+def _ratio_scale_warning(
+    estimate: float,
+    lower: float,
+    upper: float,
+    standard_error_lower: float,
+    standard_error_upper: float,
+) -> str | None:
+    """Warn when a linear-path input looks like an unlogged ratio measure.
+
+    A ratio measure (hazard ratio, odds ratio, risk ratio) is symmetric about
+    the estimate on the log scale, which makes it necessarily asymmetric on the
+    linear scale: for a log half-width ``h`` the linear half-width ratio is
+    ``exp(h)``.  The heuristic compares how far each scale departs from
+    symmetry.  It fires only when all three values are strictly positive, the
+    linear half-widths differ by more than ``_LINEAR_ASYMMETRY_TRIGGER`` (5%,
+    which is well above the rounding noise of published two- and
+    three-significant-digit intervals), and the log-scale departure from
+    symmetry is at most ``_LOG_SYMMETRY_FRACTION`` (a quarter) of the linear
+    one.  A relative comparison is used rather than a fixed log tolerance
+    because published ratios are rounded: HR 0.75 (0.60 to 0.94) is 27%
+    asymmetric on the linear scale but still 1.2% off log symmetry purely from
+    rounding, and a fixed 1% log threshold would miss it.  A genuinely
+    asymmetric estimate on a positive scale, such as a bootstrap or
+    profile-likelihood interval, stays asymmetric after logging and does not
+    fire.  The check only warns: it never changes any reported number.
+    """
+
+    if not (estimate > 0.0 and lower > 0.0 and upper > 0.0):
+        return None
+    if standard_error_lower <= 0.0 or standard_error_upper <= 0.0:
+        return None
+    linear_ratio = standard_error_upper / standard_error_lower
+    log_lower_half_width = math.log(estimate) - math.log(lower)
+    log_upper_half_width = math.log(upper) - math.log(estimate)
+    if log_lower_half_width <= 0.0 or log_upper_half_width <= 0.0:
+        return None
+    log_ratio = log_upper_half_width / log_lower_half_width
+    linear_departure = abs(linear_ratio - 1.0)
+    log_departure = abs(log_ratio - 1.0)
+    if linear_departure <= _LINEAR_ASYMMETRY_TRIGGER:
+        return None
+    if log_departure > _LOG_SYMMETRY_FRACTION * linear_departure:
+        return None
+    return (
+        "This interval is asymmetric on the linear scale but symmetric on the "
+        "log scale, which is the signature of a ratio measure (hazard ratio, "
+        "odds ratio, risk ratio). The linear path tests against a null of 0 and "
+        "reports linear-scale asymmetry, both of which are wrong for a ratio. "
+        "Re-run with --scale ratio if this estimate is a ratio measure."
+    )
+
+
 def reconstruct_from_ci(
     estimate: float,
     lower: float,
     upper: float,
     confidence: float = 0.95,
+    scale: str = "linear",
 ) -> dict[str, Any]:
     """Reconstruct approximate SE, normal statistic, and two-sided p-value.
 
@@ -57,6 +120,14 @@ def reconstruct_from_ci(
     standard errors, then averaged to obtain the central approximate SE:
 
         SE ~= ((estimate - lower) + (upper - estimate)) / (2 * z_critical)
+
+    With ``scale="linear"`` (the default) the estimate is a difference measure
+    and is tested against a null of 0 on the reported scale.  With
+    ``scale="ratio"`` the estimate is a ratio measure (hazard ratio, odds
+    ratio, risk ratio), all three values must be strictly positive, the
+    reconstruction is performed on the natural-log scale, and the null value
+    is 1.  Ratio measures must never be sent through the linear path: their
+    null is not 0 and their intervals are symmetric only after logging.
 
     This deliberately uses a normal approximation and does not infer degrees
     of freedom or claim exact reproduction of the published model.
@@ -66,21 +137,41 @@ def reconstruct_from_ci(
     lower = _validate_real(lower, "lower")
     upper = _validate_real(upper, "upper")
     confidence = _validate_confidence(confidence)
+    scale = _validate_scale(scale)
     if not lower < upper:
         raise ValueError("lower must be strictly less than upper")
     if not lower <= estimate <= upper:
         raise ValueError("estimate must lie between lower and upper")
+    if scale == "ratio" and not (estimate > 0.0 and lower > 0.0 and upper > 0.0):
+        raise ValueError(
+            "ratio scale requires strictly positive estimate, lower, and upper"
+        )
+
+    if scale == "ratio":
+        analysis_scale = "log"
+        null_value = 1.0
+        analysis_null_value = 0.0
+        analysis_estimate = math.log(estimate)
+        analysis_lower = math.log(lower)
+        analysis_upper = math.log(upper)
+    else:
+        analysis_scale = "identity"
+        null_value = 0.0
+        analysis_null_value = 0.0
+        analysis_estimate = estimate
+        analysis_lower = lower
+        analysis_upper = upper
 
     critical_value = _critical_value(confidence)
-    lower_half_width = estimate - lower
-    upper_half_width = upper - estimate
+    lower_half_width = analysis_estimate - analysis_lower
+    upper_half_width = analysis_upper - analysis_estimate
     standard_error_lower = lower_half_width / critical_value
     standard_error_upper = upper_half_width / critical_value
     standard_error = (standard_error_lower + standard_error_upper) / 2.0
     if standard_error <= 0.0:
         raise ValueError("confidence interval must have positive average width")
 
-    z_statistic = estimate / standard_error
+    z_statistic = (analysis_estimate - analysis_null_value) / standard_error
     p_two_sided = 2.0 * NormalDist().cdf(-abs(z_statistic))
     asymmetry = standard_error_upper - standard_error_lower
     asymmetry_ratio = (
@@ -89,11 +180,38 @@ def reconstruct_from_ci(
         else None
     )
 
+    if scale == "ratio":
+        scale_warning = None
+        # Back-transformed companions to the log-scale intermediates above.
+        # A ratio interval that is exactly symmetric on the log scale has an
+        # interval geometric mean equal to the reported estimate.
+        back_transformed = {
+            "estimate": estimate,
+            "lower": lower,
+            "upper": upper,
+            "interval_geometric_mean": math.exp(
+                (analysis_lower + analysis_upper) / 2.0
+            ),
+            "standard_error_multiplicative": math.exp(standard_error),
+        }
+    else:
+        scale_warning = _ratio_scale_warning(
+            estimate, lower, upper, standard_error_lower, standard_error_upper
+        )
+        back_transformed = None
+
     return {
         "estimate": estimate,
         "lower": lower,
         "upper": upper,
         "confidence": confidence,
+        "scale": scale,
+        "analysis_scale": analysis_scale,
+        "null_value": null_value,
+        "analysis_estimate": analysis_estimate,
+        "analysis_lower": analysis_lower,
+        "analysis_upper": analysis_upper,
+        "back_transformed": back_transformed,
         "critical_value_approx": critical_value,
         "lower_half_width_approx": lower_half_width,
         "upper_half_width_approx": upper_half_width,
@@ -105,12 +223,22 @@ def reconstruct_from_ci(
         "z_statistic_approx": z_statistic,
         "absolute_z_statistic_approx": abs(z_statistic),
         "p_two_sided_approx": p_two_sided,
+        "scale_warning": scale_warning,
         "approximate": True,
         "approximation_label": "approximate",
         "approximation_note": (
             "Reconstructed from the confidence-interval width using a normal "
             "critical value; exact standard error, degrees of freedom, and "
             "model-based p-value are not inferred."
+        ),
+        "scale_note": (
+            "Ratio scale: the estimate and interval are analysed on the "
+            "natural-log scale and tested against a null of 1; standard "
+            "errors and asymmetry below are log-scale quantities."
+            if scale == "ratio"
+            else "Linear scale: the estimate is tested against a null of 0 on "
+            "the reported scale. Ratio measures (hazard, odds, or risk "
+            "ratios) must be run with --scale ratio instead."
         ),
     }
 
@@ -296,6 +424,16 @@ def _build_parser() -> argparse.ArgumentParser:
     ci_parser.add_argument("lower", type=float)
     ci_parser.add_argument("upper", type=float)
     ci_parser.add_argument("--confidence", type=float, default=0.95)
+    ci_parser.add_argument(
+        "--scale",
+        choices=("linear", "ratio"),
+        default="linear",
+        help=(
+            "linear for difference measures tested against a null of 0 "
+            "(default); ratio for hazard, odds, or risk ratios, which are "
+            "analysed on the log scale against a null of 1"
+        ),
+    )
     ci_parser.add_argument("--json", action="store_true", help="emit JSON")
 
     changes_parser = subparsers.add_parser(
@@ -328,15 +466,39 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _print_ci(result: dict[str, Any]) -> None:
     print("Continuous result reconstruction: approximate")
+    print(f"Scale: {result['scale']} (analysis scale: {result['analysis_scale']})")
+    print(f"Null value: {result['null_value']:.6g}")
     print(f"Estimate: {result['estimate']:.6g}")
+    if result["scale"] == "ratio":
+        print(
+            f"Log-scale estimate: {result['analysis_estimate']:.6g} "
+            f"(log interval {result['analysis_lower']:.6g} to "
+            f"{result['analysis_upper']:.6g})"
+        )
+    label = "log-scale " if result["scale"] == "ratio" else ""
     print(
-        f"Approximate SE: {result['standard_error_approx']:.6g} "
+        f"Approximate {label}SE: {result['standard_error_approx']:.6g} "
         f"(lower-side {result['standard_error_lower_approx']:.6g}; "
         f"upper-side {result['standard_error_upper_approx']:.6g})"
     )
-    print(f"Approximate asymmetry (upper - lower SE): {result['asymmetry_approx']:.6g}")
+    print(
+        f"Approximate {label}asymmetry (upper - lower SE): "
+        f"{result['asymmetry_approx']:.6g}"
+    )
     print(f"Approximate normal statistic: {result['z_statistic_approx']:.6g}")
     print(f"Approximate two-sided p: {result['p_two_sided_approx']:.6g}")
+    if result["back_transformed"] is not None:
+        back = result["back_transformed"]
+        print(
+            "Back-transformed: estimate "
+            f"{back['estimate']:.6g}, interval [{back['lower']:.6g}, "
+            f"{back['upper']:.6g}], interval geometric mean "
+            f"{back['interval_geometric_mean']:.6g}, multiplicative SE "
+            f"{back['standard_error_multiplicative']:.6g}"
+        )
+    if result["scale_warning"] is not None:
+        print("WARNING: " + result["scale_warning"])
+    print(result["scale_note"])
     print(result["approximation_note"])
 
 
@@ -388,6 +550,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.lower,
                 args.upper,
                 confidence=args.confidence,
+                scale=args.scale,
             )
         else:
             if args.command == "changes":

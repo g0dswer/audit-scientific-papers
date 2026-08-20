@@ -29,6 +29,24 @@ VALID_PROVENANCE = {
     "DERIVED_INVALID_OR_UNJUSTIFIED",
     "UNKNOWN",
 }
+# The single canonical participant-overlap vocabulary. Rows are rejected at load
+# time when the status is outside this set, so a typo can never bypass the
+# dependence guardrail below.
+VALID_OVERLAP_STATUSES = {
+    "none",
+    "resolved_independent",
+    "resolved_duplicate_removed",
+    "modeled",
+    "unknown",
+    "unresolved",
+    "possible",
+}
+# Statuses that leave a declared possible overlap unresolved.
+UNRESOLVED_OVERLAP_STATUSES = {"", "unknown", "unresolved", "possible"}
+# Degrees-of-freedom conventions for the random-effects prediction interval.
+# "k-2" follows the Cochrane Handbook, Higgins-Thompson-Spiegelhalter (2009), and
+# IntHout et al. (2016); "k-1" reproduces the older behaviour of this script.
+PREDICTION_DF_CONVENTIONS = ("k-2", "k-1")
 
 
 class MetaAnalysisError(ValueError):
@@ -57,6 +75,7 @@ class MetaRecord:
     participant_overlap_possible: bool = False
     overlap_status: str = "none"
     include_published: bool = True
+    input_confidence: float | None = None
     notes: str = ""
 
 
@@ -69,6 +88,21 @@ def _parse_bool(value: object) -> bool:
     if normalized in {"false", "0", "no", "n", ""}:
         return False
     raise MetaAnalysisError(f"Invalid Boolean value: {value!r}")
+
+
+def _parse_optional_float(value: object) -> float | None:
+    """Parse an optional numeric cell; a blank cell means "use the global default"."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError as exc:
+        raise MetaAnalysisError(f"Invalid numeric value: {value!r}") from exc
 
 
 def load_records(path: str | Path) -> list[MetaRecord]:
@@ -114,6 +148,7 @@ def load_records(path: str | Path) -> list[MetaRecord]:
                     participant_overlap_possible=_parse_bool(row.get("participant_overlap_possible", False)),
                     overlap_status=row.get("overlap_status", "none").strip().lower() or "none",
                     include_published=_parse_bool(row.get("include_published", True)),
+                    input_confidence=_parse_optional_float(row.get("input_confidence", "")),
                     notes=row.get("notes", "").strip(),
                 )
             except (KeyError, ValueError, MetaAnalysisError) as exc:
@@ -140,6 +175,17 @@ def _validate_record(record: MetaRecord, line_number: int | None = None) -> None
         raise MetaAnalysisError(f"Unknown outcome provenance {record.outcome_provenance!r}{where}")
     if record.exposure_provenance not in VALID_PROVENANCE:
         raise MetaAnalysisError(f"Unknown exposure provenance {record.exposure_provenance!r}{where}")
+    if record.overlap_status not in VALID_OVERLAP_STATUSES:
+        raise MetaAnalysisError(
+            f"Unknown overlap status {record.overlap_status!r}{where}; expected one of "
+            f"{', '.join(sorted(VALID_OVERLAP_STATUSES))}"
+        )
+    if record.input_confidence is not None and not (
+        math.isfinite(record.input_confidence) and 0.0 < record.input_confidence < 1.0
+    ):
+        raise MetaAnalysisError(
+            f"Per-row input_confidence must be strictly between zero and one{where}"
+        )
 
 
 def filter_records(
@@ -330,22 +376,37 @@ def _tau2_reml(values: Sequence[float], variances: Sequence[float]) -> float:
     return 0.0 if objective(0.0) >= objective(estimate) else max(0.0, estimate)
 
 
-def _analysis_vectors(records: Sequence[MetaRecord], input_confidence: float) -> tuple[list[float], list[float], str]:
-    if not 0 < input_confidence < 1:
+def _source_critical_z(input_confidence: float) -> float:
+    """Return the normal quantile used to invert a printed source interval."""
+    if not math.isfinite(input_confidence) or not 0 < input_confidence < 1:
         raise MetaAnalysisError("Input confidence must be between zero and one")
     # Preserve the conventional 1.96 reconstruction used by most printed 95%
     # intervals and by the versioned regression fixture. Use the exact normal
     # quantile for other confidence levels.
-    z_value = 1.96 if math.isclose(input_confidence, 0.95, rel_tol=0.0, abs_tol=1e-15) else NormalDist().inv_cdf(
-        1.0 - (1.0 - input_confidence) / 2.0
-    )
+    if math.isclose(input_confidence, 0.95, rel_tol=0.0, abs_tol=1e-15):
+        return 1.96
+    return NormalDist().inv_cdf(1.0 - (1.0 - input_confidence) / 2.0)
+
+
+def _analysis_vectors(
+    records: Sequence[MetaRecord], input_confidence: float
+) -> tuple[list[float], list[float], str, list[float]]:
+    # Validate the global default even when every row overrides it.
+    _source_critical_z(input_confidence)
     measure_families = {"ratio" if record.measure in RATIO_MEASURES else "linear" for record in records}
     if len(measure_families) != 1:
         raise MetaAnalysisError("Ratio and linear effect scales cannot be pooled")
     scale = next(iter(measure_families))
     values: list[float] = []
     variances: list[float] = []
+    row_confidences: list[float] = []
     for record in records:
+        # A per-row input_confidence column wins over the global default so that a
+        # dataset mixing 95% and 90% printed intervals is inverted row by row.
+        row_confidence = (
+            record.input_confidence if record.input_confidence is not None else input_confidence
+        )
+        z_value = _source_critical_z(row_confidence)
         if scale == "ratio":
             value = math.log(record.effect)
             standard_error = (math.log(record.upper) - math.log(record.lower)) / (2.0 * z_value)
@@ -356,7 +417,8 @@ def _analysis_vectors(records: Sequence[MetaRecord], input_confidence: float) ->
             raise MetaAnalysisError(f"Invalid reconstructed standard error for {record.study_id}")
         values.append(value)
         variances.append(standard_error * standard_error)
-    return values, variances, scale
+        row_confidences.append(row_confidence)
+    return values, variances, scale, row_confidences
 
 
 def meta_analysis(
@@ -367,6 +429,7 @@ def meta_analysis(
     inference: str = "normal",
     confidence: float = 0.95,
     input_confidence: float = 0.95,
+    prediction_df: str = "k-2",
     allow_mixed_estimands: bool = False,
     allow_dependence: bool = False,
     leave_one_out: bool = False,
@@ -384,9 +447,13 @@ def meta_analysis(
     measures = sorted({record.measure for record in records})
     warnings: list[str] = []
     if len(measures) > 1:
+        if set(measures).issubset(LINEAR_MEASURES):
+            raise MetaAnalysisError(
+                "Different linear effect measures such as MD and SMD are on different units, are not commensurable, and cannot use the mixed-estimand override"
+            )
         if not set(measures).issubset(RATIO_MEASURES):
             raise MetaAnalysisError(
-                "Different linear effect measures such as MD and SMD are not commensurable and cannot use the mixed-estimand override"
+                "Ratio measures cannot be pooled with linear measures such as MD or SMD: the two effect scales are not commensurable and the mixed-estimand override does not apply"
             )
         if not allow_mixed_estimands:
             raise MetaAnalysisError(
@@ -398,7 +465,7 @@ def meta_analysis(
     unresolved = [
         record.study_id
         for record in records
-        if record.participant_overlap_possible and record.overlap_status in {"", "unknown", "unresolved", "possible"}
+        if record.participant_overlap_possible and record.overlap_status in UNRESOLVED_OVERLAP_STATUSES
     ]
     if unresolved:
         if not allow_dependence:
@@ -438,7 +505,7 @@ def meta_analysis(
     if assumption_exposures:
         warnings.append(f"{assumption_exposures} row(s) have assumption-dependent exposure provenance.")
 
-    values, variances, scale = _analysis_vectors(records, input_confidence)
+    values, variances, scale, row_confidences = _analysis_vectors(records, input_confidence)
     fixed_weights = [1.0 / variance for variance in variances]
     fixed_estimate = _weighted_mean(values, fixed_weights)
     q_value = sum(
@@ -476,6 +543,12 @@ def meta_analysis(
             weight * (value - pooled_linear) ** 2
             for weight, value in zip(weights, values)
         ) / degrees_of_freedom
+        if not math.isfinite(hksj_q) or hksj_q <= 1e-12:
+            raise MetaAnalysisError(
+                "The Hartung-Knapp-Sidik-Jonkman scale factor is zero or not finite because the study "
+                "estimates carry no residual dispersion; the interval is not estimable and a zero-width "
+                "interval will not be reported"
+            )
         standard_error = math.sqrt(hksj_q / sum(weights))
         critical = _student_t_quantile(1.0 - (1.0 - confidence) / 2.0, degrees_of_freedom)
         if hksj_q < 1.0:
@@ -487,16 +560,35 @@ def meta_analysis(
 
     lower_linear = pooled_linear - critical * standard_error
     upper_linear = pooled_linear + critical * standard_error
-    if normalized_model == "random":
-        prediction_critical = _student_t_quantile(
-            1.0 - (1.0 - confidence) / 2.0, degrees_of_freedom
+
+    prediction_convention = str(prediction_df).strip().lower()
+    if prediction_convention not in PREDICTION_DF_CONVENTIONS:
+        raise MetaAnalysisError("prediction_df must be k-2 or k-1")
+    prediction_degrees_of_freedom: int | None = len(values) - (
+        2 if prediction_convention == "k-2" else 1
+    )
+    prediction_reason: str | None = None
+    prediction_lower_linear = None
+    prediction_upper_linear = None
+    if normalized_model != "random":
+        prediction_degrees_of_freedom = None
+        prediction_reason = "A fixed-effect model has no between-study distribution to predict"
+    elif prediction_degrees_of_freedom < 1:
+        prediction_reason = (
+            f"A prediction interval on {prediction_convention} degrees of freedom is not "
+            f"estimable with k={len(values)}"
         )
-        prediction_se = math.sqrt(standard_error * standard_error + tau2)
+        prediction_degrees_of_freedom = None
+    else:
+        prediction_critical = _student_t_quantile(
+            1.0 - (1.0 - confidence) / 2.0, prediction_degrees_of_freedom
+        )
+        # A prediction interval describes the distribution of true effects, so it is
+        # always built from the conventional inverse-variance standard error and never
+        # from an inference-specific (for example HKSJ) standard error.
+        prediction_se = math.sqrt(conventional_se * conventional_se + tau2)
         prediction_lower_linear = pooled_linear - prediction_critical * prediction_se
         prediction_upper_linear = pooled_linear + prediction_critical * prediction_se
-    else:
-        prediction_lower_linear = None
-        prediction_upper_linear = None
 
     transform = math.exp if scale == "ratio" else lambda value: value
     cohort_cluster_count = len({record.cohort_id for record in records})
@@ -512,6 +604,7 @@ def meta_analysis(
         "inference": normalized_inference,
         "confidence": confidence,
         "input_confidence": input_confidence,
+        "input_confidence_levels": sorted(set(row_confidences)),
         "scale": "log_ratio" if scale == "ratio" else "linear",
         "measures": measures,
         "pooled_linear": pooled_linear,
@@ -525,7 +618,9 @@ def meta_analysis(
         "tau2": tau2,
         "I2_percent": i2,
         "hksj_scale_q": hksj_q,
-        "prediction_interval_df": degrees_of_freedom if normalized_model == "random" else None,
+        "prediction_df_convention": prediction_convention,
+        "prediction_interval_df": prediction_degrees_of_freedom,
+        "prediction_not_estimable_reason": prediction_reason,
         "prediction_lower": transform(prediction_lower_linear) if prediction_lower_linear is not None else None,
         "prediction_upper": transform(prediction_upper_linear) if prediction_upper_linear is not None else None,
         "warnings": warnings,
@@ -542,6 +637,7 @@ def meta_analysis(
             inference=inference,
             confidence=confidence,
             input_confidence=input_confidence,
+            prediction_df=prediction_convention,
             allow_mixed_estimands=allow_mixed_estimands,
             allow_dependence=allow_dependence,
             full_result=result,
@@ -557,6 +653,7 @@ def _leave_one_cluster_out(
     inference: str,
     confidence: float,
     input_confidence: float,
+    prediction_df: str,
     allow_mixed_estimands: bool,
     allow_dependence: bool,
     full_result: dict,
@@ -576,6 +673,7 @@ def _leave_one_cluster_out(
             inference=inference,
             confidence=confidence,
             input_confidence=input_confidence,
+            prediction_df=prediction_df,
             allow_mixed_estimands=allow_mixed_estimands,
             allow_dependence=allow_dependence,
             leave_one_out=False,
@@ -599,33 +697,61 @@ def _leave_one_cluster_out(
 def run_sensitivity_ladder(
     records: Sequence[MetaRecord],
     *,
+    model: str = "random",
     tau2_method: str = "DL",
     common_measure: str | None = None,
     confidence: float = 0.95,
     input_confidence: float = 0.95,
+    prediction_df: str = "k-2",
     allow_dependence: bool = False,
     allow_mixed_estimands: bool = False,
 ) -> list[dict]:
     """Run a deterministic provenance/estimand/method sensitivity ladder."""
     if not records:
         raise MetaAnalysisError("The sensitivity ladder has no records")
+    normalized_model = str(model).strip().lower()
+    if normalized_model not in {"fixed", "random"}:
+        raise MetaAnalysisError("model must be fixed or random")
     measure = common_measure.upper() if common_measure else None
     if len({record.measure for record in records}) > 1 and measure is None:
         raise MetaAnalysisError("A common_measure is required for a mixed-measure sensitivity ladder")
 
     def fit(subset: Sequence[MetaRecord], **options: object) -> dict:
+        # Every rung reproduces the model the caller validated at the reproduction
+        # gate unless a rung explicitly overrides it, and every returned payload
+        # states which model produced it.
+        rung_model = str(options.pop("model", normalized_model))
         try:
             return meta_analysis(
                 subset,
+                model=rung_model,
                 tau2_method=str(options.pop("tau2_method", tau2_method)),
                 confidence=confidence,
                 input_confidence=input_confidence,
+                prediction_df=prediction_df,
                 allow_mixed_estimands=bool(options.pop("allow_mixed_estimands", False)),
                 allow_dependence=bool(options.pop("allow_dependence", False)),
                 **options,
             )
         except MetaAnalysisError as exc:
-            return {"status": "NOT_ASSESSABLE", "reason": str(exc), "k": len(subset)}
+            return {
+                "status": "NOT_ASSESSABLE",
+                "model": rung_model,
+                "reason": str(exc),
+                "k": len(subset),
+            }
+
+    # S6 compares between-study variance estimators and S7 is HKSJ inference; both
+    # are defined only for random-effects synthesis, so a fixed-effect request must
+    # skip them rather than silently publish random-effects numbers.
+    random_only_skip = {
+        "status": "NOT_ASSESSABLE",
+        "model": normalized_model,
+        "reason": (
+            "This rung is defined only for random-effects synthesis and was skipped because the "
+            "requested model is fixed effect; rerun with --model random to assess it."
+        ),
+    }
 
     direct_outcomes = filter_records(records, direct_outcomes_only=True, published_only=False)
     common = filter_records(records, common_measure=measure, published_only=False) if measure else list(records)
@@ -676,7 +802,9 @@ def run_sensitivity_ladder(
         {
             "id": "S6_alternative_tau2",
             "description": "Compare DerSimonian-Laird, Paule-Mandel, and restricted maximum likelihood",
-            "result": {
+            "result": dict(random_only_skip)
+            if normalized_model == "fixed"
+            else {
                 method: fit(direct_common, tau2_method=method, allow_mixed_estimands=False)
                 for method in ("DL", "PM", "REML")
             },
@@ -684,7 +812,9 @@ def run_sensitivity_ladder(
         {
             "id": "S7_hksj",
             "description": "Hartung-Knapp-Sidik-Jonkman inference on the clean common-measure model",
-            "result": fit(direct_common, inference="HKSJ", allow_mixed_estimands=False),
+            "result": dict(random_only_skip)
+            if normalized_model == "fixed"
+            else fit(direct_common, inference="HKSJ", allow_mixed_estimands=False),
         },
         {
             "id": "S8_leave_one_cluster_out",
@@ -692,6 +822,8 @@ def run_sensitivity_ladder(
             "result": fit(direct_common, leave_one_out=True, allow_mixed_estimands=False),
         },
     ]
+    for step in ladder:
+        step["model"] = normalized_model
     return ladder
 
 
@@ -703,7 +835,13 @@ def _human_summary(result: dict) -> str:
     ]
     if result["prediction_lower"] is not None:
         lines.append(
-            f"Prediction interval: {result['prediction_lower']:.6g} to {result['prediction_upper']:.6g}"
+            f"Prediction interval: {result['prediction_lower']:.6g} to {result['prediction_upper']:.6g} "
+            f"(Student t on {result['prediction_interval_df']} degrees of freedom; "
+            f"convention {result['prediction_df_convention']})"
+        )
+    elif result.get("prediction_not_estimable_reason"):
+        lines.append(
+            f"Prediction interval: not reported ({result['prediction_not_estimable_reason']})"
         )
     if result["warnings"]:
         lines.append("Warnings:")
@@ -722,13 +860,17 @@ def _human_sensitivity_summary(payload: dict) -> str:
         )
     for step in payload.get("sensitivity_ladder", []):
         result = step["result"]
+        model = step.get("model") or (result.get("model") if isinstance(result, dict) else None)
+        label = f"{step['id']} [{model or 'unspecified model'}]"
         if isinstance(result, dict) and "pooled" in result:
             lines.append(
-                f"{step['id']}: {result['pooled']:.6g} "
+                f"{label}: {result['pooled']:.6g} "
                 f"({result['ci_lower']:.6g} to {result['ci_upper']:.6g})"
             )
+        elif isinstance(result, dict) and result.get("status"):
+            lines.append(f"{label}: {result['status']}: {result.get('reason', '')}")
         else:
-            lines.append(f"{step['id']}: model comparison or influence output")
+            lines.append(f"{label}: model comparison or influence output")
     if payload["sensitivity_status"].startswith("BLOCKED"):
         lines.append("Do not interpret sensitivity analyses until the reproduction discrepancy is explained.")
     return "\n".join(lines)
@@ -747,6 +889,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.95,
         help="Confidence level of the source intervals used to reconstruct standard errors",
+    )
+    parser.add_argument(
+        "--prediction-df",
+        choices=PREDICTION_DF_CONVENTIONS,
+        default="k-2",
+        help=(
+            "Degrees-of-freedom convention for the random-effects prediction interval: "
+            "k-2 follows the Cochrane Handbook and Higgins-Thompson-Spiegelhalter; k-1 "
+            "reproduces the earlier behaviour of this script"
+        ),
     )
     parser.add_argument("--direct-outcomes-only", action="store_true")
     parser.add_argument("--direct-exposures-only", action="store_true")
@@ -785,6 +937,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 inference=args.inference,
                 confidence=args.confidence,
                 input_confidence=args.input_confidence,
+                prediction_df=args.prediction_df,
                 allow_mixed_estimands=args.allow_mixed_estimands,
                 allow_dependence=args.allow_dependence,
             )
@@ -811,10 +964,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "sensitivity_status": "READY",
                     "sensitivity_ladder": run_sensitivity_ladder(
                         base_records,
+                        model=args.model,
                         tau2_method=args.tau2,
                         common_measure=args.common_measure,
                         confidence=args.confidence,
                         input_confidence=args.input_confidence,
+                        prediction_df=args.prediction_df,
                         allow_dependence=args.allow_dependence,
                         allow_mixed_estimands=args.allow_mixed_estimands,
                     ),
@@ -836,6 +991,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 inference=args.inference,
                 confidence=args.confidence,
                 input_confidence=args.input_confidence,
+                prediction_df=args.prediction_df,
                 allow_mixed_estimands=args.allow_mixed_estimands,
                 allow_dependence=args.allow_dependence,
                 leave_one_out=args.leave_one_out,

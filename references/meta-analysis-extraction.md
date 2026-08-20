@@ -32,12 +32,21 @@ outcome_provenance,exposure_provenance,sex,source_location,source_type,
 source_url,participant_overlap_possible,overlap_status,include_published,notes
 ```
 
-Add review-specific fields when material: follow-up, events, sample size, dose contrast,
-reference category, adjusted_age, adjusted_sex, adjusted_smoking, adjusted_bmi,
+`input_confidence` is an optional per-row column, read by the scripts, giving the
+confidence level of that row's printed interval as a decimal (`0.95`, `0.90`). Leave it
+blank to inherit the global `--input-confidence`, which itself defaults to 0.95. Set it
+whenever a forest plot mixes interval levels: the standard error is inverted from the
+printed bounds, so applying 1.96 to a printed 90% interval inflates that row's variance by
+roughly forty percent and silently misweights it. Every output lists the levels it
+actually used in `input_confidence_levels`; check that list against the source figure.
+
+Add other review-specific fields when material: follow-up, events, sample size, dose
+contrast, reference category, adjusted_age, adjusted_sex, adjusted_smoking, adjusted_bmi,
 adjusted_energy, adjusted_physical_activity, adjusted_alcohol, adjusted_socioeconomic,
-risk_of_bias, population_applicability, clinical_heterogeneity, input_confidence, and
-extraction_verifier. Keep endpoint provenance separate from whether a disease-specific
-population is applicable to the review's target population.
+risk_of_bias, population_applicability, clinical_heterogeneity, and extraction_verifier.
+Fields outside the schema above are carried for the human record and are not read by the
+scripts. Keep endpoint provenance separate from whether a disease-specific population is
+applicable to the review's target population.
 
 ## Provenance vocabulary
 
@@ -71,6 +80,11 @@ SE = [log(upper) - log(lower)] / (2 * 1.96)
 variance = SE^2
 ```
 
+The divisor is the normal quantile for that row's interval level. For a printed 95%
+interval the scripts use the conventional 1.96 rather than 1.959964, because that is the
+value the published interval was almost certainly rounded with; for any other level, and
+for a row carrying its own `input_confidence`, the exact normal quantile is used.
+
 This is an aggregate-data reconstruction from rounded bounds. It is not the original
 model standard error. Preserve extra digits when supplied; do not infer them from a plot.
 
@@ -84,7 +98,19 @@ updates. Record possible overlap and its resolution:
 - `resolved_independent`: distinct participant sets verified;
 - `resolved_duplicate_removed`: duplicate or overlapping row excluded;
 - `modeled`: dependence represented in a valid covariance/multilevel model;
-- `unresolved`: overlap remains plausible.
+- `unresolved`: overlap remains plausible;
+- `possible`: overlap is suspected but not yet investigated;
+- `unknown`: the source trail does not say either way.
+
+This vocabulary is closed. The loader rejects any other value with a row-numbered error
+rather than accepting it, because an unrecognized status used to slip past the dependence
+guard silently: a row flagged `participant_overlap_possible` with a mistyped status was
+pooled as though the overlap had been resolved. Treat a typo as a blocking error, not a
+formatting preference.
+
+`none` is an assertion that you looked and found no plausible overlap. If you have not
+looked, the honest value is `unknown` or `possible`, both of which block default pooling
+when `participant_overlap_possible` is true.
 
 Multiple rows from one cohort may be valid strata, but they are not automatically
 independent. Leave-one-out diagnostics should delete the cohort cluster, not just one row.

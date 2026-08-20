@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Sequence
 
 from reconstruct_meta_analysis import (
+    PREDICTION_DF_CONVENTIONS,
     MetaAnalysisError,
     MetaRecord,
     filter_records,
@@ -42,6 +43,13 @@ def write_forest_svg(
         axis_min, axis_max = raw_min, raw_max
         null_value = 0.0
         convert = lambda value: value
+    source_levels = result.get("input_confidence_levels") or [result["input_confidence"]]
+    source_label = (
+        f"source {source_levels[0]:.0%} CI"
+        if len(source_levels) == 1
+        else "mixed source CI levels: "
+        + ", ".join(f"{level:.0%}" for level in source_levels)
+    )
     padding = max((axis_max - axis_min) * 0.06, 1e-9)
     axis_min -= padding
     axis_max += padding
@@ -62,19 +70,30 @@ def write_forest_svg(
         '<rect width="100%" height="100%" fill="white"/>',
         f'<text x="24" y="34" font-family="sans-serif" font-size="22" font-weight="bold">{html.escape(title)}</text>',
         '<text x="24" y="66" font-family="sans-serif" font-size="13">Study</text>',
-        f'<text x="{right + 20}" y="66" font-family="sans-serif" font-size="13">Effect (source {result["input_confidence"]:.0%} CI)</text>',
+        f'<text x="{right + 20}" y="66" font-family="sans-serif" font-size="13">Effect ({html.escape(source_label)})</text>',
     ]
-    null_x = left + (null_value - axis_min) / (axis_max - axis_min) * (right - left)
-    lines.append(
-        f'<line x1="{null_x:.2f}" y1="{header - 12}" x2="{null_x:.2f}" y2="{height - footer + 5}" stroke="#777" stroke-dasharray="4 4"/>'
-    )
-    weights = {item["study_id"]: item["weight"] for item in result["study_weights_percent"]}
-    largest_weight = max(weights.values())
+    # Omit the null line when the null value falls outside the plotted range; an
+    # unclamped line lands on top of the numeric text column and misleads.
+    if axis_min <= null_value <= axis_max:
+        null_x = left + (null_value - axis_min) / (axis_max - axis_min) * (right - left)
+        lines.append(
+            f'<line x1="{null_x:.2f}" y1="{header - 12}" x2="{null_x:.2f}" y2="{height - footer + 5}" stroke="#777" stroke-dasharray="4 4"/>'
+        )
+    # Weights are matched to rows positionally: study_weights_percent is built by
+    # zipping over this same records sequence, and study_id is not unique within a
+    # pool (sex, arm, and timepoint strata legitimately repeat it).
+    weights = [item["weight"] for item in result["study_weights_percent"]]
+    if len(weights) != len(records):
+        raise MetaAnalysisError(
+            "The plotted rows and the fitted study weights are not aligned; plot the same "
+            "records that were passed to meta_analysis"
+        )
+    largest_weight = max(weights)
     for index, record in enumerate(records):
         y = header + index * row_height
         low_x, high_x, point_x = x_position(record.lower), x_position(record.upper), x_position(record.effect)
         label = record.citation + (f" ({record.sex})" if record.sex and record.sex != "all" else "")
-        square_side = 4.0 + 10.0 * math.sqrt(weights[record.study_id] / largest_weight)
+        square_side = 4.0 + 10.0 * math.sqrt(weights[index] / largest_weight)
         lines.extend(
             [
                 f'<text x="24" y="{y + 5}" font-family="sans-serif" font-size="12">{html.escape(label)}</text>',
@@ -135,21 +154,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--tau2", choices=("DL", "PM", "REML"), default="DL")
     parser.add_argument("--inference", choices=("normal", "HKSJ"), default="normal")
     parser.add_argument("--common-measure")
+    parser.add_argument("--model", choices=("fixed", "random"), default="random")
+    parser.add_argument("--input-confidence", type=float, default=0.95)
+    parser.add_argument("--prediction-df", choices=PREDICTION_DF_CONVENTIONS, default="k-2")
     parser.add_argument("--allow-mixed-estimands", action="store_true")
+    parser.add_argument("--allow-dependence", action="store_true")
     parser.add_argument("--title", default="Meta-analysis reconstruction")
     args = parser.parse_args(argv)
-    records = filter_records(
-        load_records(args.dataset),
-        analysis_id=args.analysis_id,
-        common_measure=args.common_measure,
-    )
-    result = meta_analysis(
-        records,
-        tau2_method=args.tau2,
-        inference=args.inference,
-        allow_mixed_estimands=args.allow_mixed_estimands,
-    )
-    output = write_forest_svg(records, result, args.destination, title=args.title)
+    try:
+        records = filter_records(
+            load_records(args.dataset),
+            analysis_id=args.analysis_id,
+            common_measure=args.common_measure,
+        )
+        result = meta_analysis(
+            records,
+            model=args.model,
+            tau2_method=args.tau2,
+            inference=args.inference,
+            input_confidence=args.input_confidence,
+            prediction_df=args.prediction_df,
+            allow_mixed_estimands=args.allow_mixed_estimands,
+            allow_dependence=args.allow_dependence,
+        )
+        output = write_forest_svg(records, result, args.destination, title=args.title)
+    except (MetaAnalysisError, OSError) as exc:
+        raise SystemExit(f"error: {exc}") from exc
     print(
         json.dumps(
             {

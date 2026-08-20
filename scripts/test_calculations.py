@@ -1,17 +1,27 @@
+import contextlib
+import io
 import json
 import math
 import subprocess
 import sys
+import types
 import unittest
 from pathlib import Path
+from statistics import NormalDist
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import calculate_binary_effects  # noqa: E402
 from calculate_binary_effects import (  # noqa: E402
     _ceil_positive,
+    _cli_direction,
+    _fisher_exact_two_sided,
+    _odds_ratio_interval,
+    _risk_ratio_interval,
+    _split_reciprocal_interval,
     analyze_binary,
     newcombe_difference_interval,
     wilson_interval,
@@ -21,6 +31,15 @@ from verify_continuous_result import (  # noqa: E402
     check_standardized_effect,
     reconstruct_from_ci,
 )
+
+
+_CRITICAL_VALUE_95 = NormalDist().inv_cdf(0.975)
+
+
+def back_geometric_mean(result):
+    """Convenience accessor for the back-transformed interval geometric mean."""
+
+    return result["back_transformed"]["interval_geometric_mean"]
 
 
 class BinaryEffectTests(unittest.TestCase):
@@ -185,8 +204,397 @@ class BinaryEffectTests(unittest.TestCase):
         self.assertIn("possible benefit", completed.stdout)
         self.assertIn("possible harm", completed.stdout)
 
+    def test_relative_effect_intervals_match_hand_worked_log_scale_values(self):
+        # Worked example with cells a=15, b=85, c=5, d=95.
+        # Katz: log RR = log 3, SE = sqrt(1/15 - 1/100 + 1/5 - 1/100) = 0.4966555.
+        # Woolf: log OR = log 3.352941, SE = sqrt(1/15 + 1/85 + 1/5 + 1/95) = 0.5375478.
+        result = analyze_binary(15, 100, 5, 100, beneficial=True)
+
+        risk_ratio_ci = result["risk_ratio_ci"]
+        odds_ratio_ci = result["odds_ratio_ci"]
+        self.assertAlmostEqual(result["risk_ratio"], 3.0, places=12)
+        self.assertAlmostEqual(risk_ratio_ci["log_standard_error"], 0.49665548085838, places=12)
+        self.assertAlmostEqual(risk_ratio_ci["lower"], 1.1333585961897887, delta=1e-12)
+        self.assertAlmostEqual(risk_ratio_ci["upper"], 7.940999459709293, delta=1e-12)
+        self.assertEqual(risk_ratio_ci["method"], "katz_log")
+        self.assertTrue(risk_ratio_ci["approximate"])
+
+        self.assertAlmostEqual(result["odds_ratio"], 3.3529411764705883, places=12)
+        self.assertAlmostEqual(odds_ratio_ci["log_standard_error"], 0.53754784748755, places=12)
+        self.assertAlmostEqual(odds_ratio_ci["lower"], 1.1691342325734828, delta=1e-12)
+        self.assertAlmostEqual(odds_ratio_ci["upper"], 9.61584582817814, delta=1e-12)
+        self.assertEqual(odds_ratio_ci["method"], "woolf_log")
+        self.assertIn("continuity correction", result["relative_effect_note"])
+
+    def test_relative_effect_intervals_are_null_when_a_cell_is_zero(self):
+        no_events_in_treatment = analyze_binary(0, 10, 5, 10, beneficial=True)
+        self.assertEqual(no_events_in_treatment["risk_ratio"], 0.0)
+        self.assertIsNone(no_events_in_treatment["risk_ratio_ci"])
+        self.assertEqual(no_events_in_treatment["odds_ratio"], 0.0)
+        self.assertIsNone(no_events_in_treatment["odds_ratio_ci"])
+
+        no_events_in_control = analyze_binary(5, 10, 0, 10, beneficial=True)
+        self.assertIsNone(no_events_in_control["risk_ratio"])
+        self.assertIsNone(no_events_in_control["risk_ratio_ci"])
+        self.assertIsNone(no_events_in_control["odds_ratio"])
+        self.assertIsNone(no_events_in_control["odds_ratio_ci"])
+
+        all_events_in_treatment = analyze_binary(10, 10, 5, 10, beneficial=True)
+        self.assertIsNotNone(all_events_in_treatment["risk_ratio_ci"])
+        self.assertIsNone(all_events_in_treatment["odds_ratio_ci"])
+
+        self.assertIsNone(_risk_ratio_interval(0, 10, 0, 10, 0.95))
+        self.assertIsNone(_odds_ratio_interval(0, 10, 0, 10, 0.95))
+
+    def test_unspecified_event_direction_is_announced_not_silent(self):
+        assumed = analyze_binary(16, 41, 12, 39)
+        self.assertFalse(assumed["event_direction_specified"])
+        self.assertTrue(assumed["beneficial_event"])
+        self.assertEqual(assumed["event_direction"], "beneficial")
+        self.assertIn("NOT SPECIFIED", assumed["event_direction_notice"])
+        self.assertIn("--harm", assumed["event_direction_notice"])
+
+        stated_benefit = analyze_binary(16, 41, 12, 39, beneficial=True)
+        self.assertTrue(stated_benefit["event_direction_specified"])
+        self.assertIsNone(stated_benefit["event_direction_notice"])
+        self.assertEqual(stated_benefit["event_direction"], "beneficial")
+
+        stated_harm = analyze_binary(16, 41, 12, 39, beneficial=False)
+        self.assertTrue(stated_harm["event_direction_specified"])
+        self.assertIsNone(stated_harm["event_direction_notice"])
+        self.assertEqual(stated_harm["event_direction"], "harmful")
+
+        # The assumed default must not move any number relative to --benefit.
+        self.assertEqual(assumed["classification"], stated_benefit["classification"])
+        self.assertEqual(
+            assumed["point_estimate"]["unrounded"],
+            stated_benefit["point_estimate"]["unrounded"],
+        )
+
+    def test_direction_flags_map_to_the_beneficial_argument(self):
+        self.assertIsNone(_cli_direction(False, False))
+        self.assertFalse(_cli_direction(True, False))
+        self.assertTrue(_cli_direction(False, True))
+
+        with self.assertRaises(ValueError):
+            analyze_binary(1, 10, 1, 10, beneficial="yes")
+
+    def test_cli_direction_flags_and_notice(self):
+        script = str(SCRIPT_DIR / "calculate_binary_effects.py")
+        counts = ["16", "41", "12", "39"]
+
+        default_run = subprocess.run(
+            [sys.executable, script, *counts], check=True, capture_output=True, text=True
+        )
+        self.assertIn("EVENT DIRECTION NOT SPECIFIED", default_run.stdout)
+
+        default_json = json.loads(
+            subprocess.run(
+                [sys.executable, script, *counts, "--json"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+        )
+        self.assertFalse(default_json["event_direction_specified"])
+        self.assertIn("NOT SPECIFIED", default_json["event_direction_notice"])
+
+        benefit_json = json.loads(
+            subprocess.run(
+                [sys.executable, script, *counts, "--benefit", "--json"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+        )
+        self.assertTrue(benefit_json["event_direction_specified"])
+        self.assertIsNone(benefit_json["event_direction_notice"])
+        self.assertEqual(benefit_json["event_direction"], "beneficial")
+
+        harm_json = json.loads(
+            subprocess.run(
+                [sys.executable, script, *counts, "--harm", "--json"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+        )
+        self.assertEqual(harm_json["event_direction"], "harmful")
+        self.assertIsNone(harm_json["event_direction_notice"])
+
+        conflicting = subprocess.run(
+            [sys.executable, script, *counts, "--harm", "--benefit"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(conflicting.returncode, 0)
+        self.assertIn("not allowed with argument", conflicting.stderr)
+
+    def test_cli_prints_relative_effects_with_intervals(self):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "calculate_binary_effects.py"),
+                "15",
+                "100",
+                "5",
+                "100",
+                "--benefit",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("Risk ratio: 3 (large-sample 95% CI [1.13336, 7.941], katz_log)", completed.stdout)
+        self.assertIn("Odds ratio: 3.35294 (large-sample 95% CI [1.16913, 9.61585], woolf_log)", completed.stdout)
+
+        zero_cell = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "calculate_binary_effects.py"),
+                "0",
+                "10",
+                "5",
+                "10",
+                "--benefit",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("CI undefined: zero cell", zero_cell.stdout)
+
+    def test_split_reciprocal_interval_bounds_are_unbounded_nulls(self):
+        both_sides = _split_reciprocal_interval(-0.2, 0.25)
+        self.assertEqual(both_sides["benefit_from"], 4)
+        self.assertEqual(both_sides["harm_from"], 5)
+        self.assertIsNone(both_sides["benefit_to"])
+        self.assertIsNone(both_sides["harm_to"])
+
+        benefit_only = _split_reciprocal_interval(0.0, 0.25)
+        self.assertEqual(benefit_only["benefit_from"], 4)
+        self.assertIsNone(benefit_only["harm_from"])
+
+        harm_only = _split_reciprocal_interval(-0.2, 0.0)
+        self.assertIsNone(harm_only["benefit_from"])
+        self.assertEqual(harm_only["harm_from"], 5)
+
+    def test_human_output_never_prints_a_none_reciprocal_bound(self):
+        result = analyze_binary(16, 41, 12, 39, beneficial=True)
+        result["split_interval"] = _split_reciprocal_interval(0.0, 0.25)
+        original = calculate_binary_effects.analyze_binary
+        calculate_binary_effects.analyze_binary = lambda *args, **kwargs: result
+        buffer = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buffer):
+                calculate_binary_effects.main(["16", "41", "12", "39", "--benefit"])
+        finally:
+            calculate_binary_effects.analyze_binary = original
+        output = buffer.getvalue()
+        self.assertIn("Split reciprocal interval:", output)
+        self.assertIn("no possible harm side", output)
+        self.assertNotIn("None", output)
+
+
+class FisherOptionalDependencyTests(unittest.TestCase):
+    """The optional SciPy path must degrade, never crash the calculator."""
+
+    def setUp(self):
+        self._saved = {
+            name: sys.modules[name]
+            for name in ("scipy", "scipy.stats")
+            if name in sys.modules
+        }
+
+    def tearDown(self):
+        for name in ("scipy", "scipy.stats"):
+            sys.modules.pop(name, None)
+        sys.modules.update(self._saved)
+
+    @staticmethod
+    def _install_fake_scipy(fisher_exact):
+        scipy = types.ModuleType("scipy")
+        stats = types.ModuleType("scipy.stats")
+        stats.fisher_exact = fisher_exact
+        scipy.stats = stats
+        sys.modules["scipy"] = scipy
+        sys.modules["scipy.stats"] = stats
+
+    def test_absent_scipy_degrades_to_none(self):
+        sys.modules.pop("scipy", None)
+        sys.modules.pop("scipy.stats", None)
+        self.assertIsNone(_fisher_exact_two_sided(15, 100, 5, 100))
+        self.assertIsNone(analyze_binary(15, 100, 5, 100)["fisher_exact_p_two_sided"])
+
+    def test_modern_scipy_result_object_is_used(self):
+        class SignificanceResult(tuple):
+            @property
+            def pvalue(self):
+                return self[1]
+
+        self._install_fake_scipy(
+            lambda table, alternative=None: SignificanceResult((3.35, 0.0325))
+        )
+        self.assertAlmostEqual(_fisher_exact_two_sided(15, 100, 5, 100), 0.0325, places=12)
+
+    def test_legacy_scipy_tuple_is_accepted(self):
+        self._install_fake_scipy(lambda table, alternative=None: (3.35, 0.0325))
+        self.assertAlmostEqual(_fisher_exact_two_sided(15, 100, 5, 100), 0.0325, places=12)
+        self.assertAlmostEqual(
+            analyze_binary(15, 100, 5, 100)["fisher_exact_p_two_sided"], 0.0325, places=12
+        )
+
+    def test_raising_scipy_does_not_break_the_calculator(self):
+        def explode(table, alternative=None):
+            raise RuntimeError("legacy SciPy failure")
+
+        self._install_fake_scipy(explode)
+        self.assertIsNone(_fisher_exact_two_sided(15, 100, 5, 100))
+        result = analyze_binary(15, 100, 5, 100)
+        self.assertIsNone(result["fisher_exact_p_two_sided"])
+        self.assertAlmostEqual(result["risk_ratio"], 3.0, places=12)
+
 
 class ContinuousResultTests(unittest.TestCase):
+    def test_ratio_scale_uses_the_log_scale_and_a_null_of_one(self):
+        # Hazard ratio 0.75 (0.60 to 0.94): SE(log HR) = 0.11453, z = -2.51184,
+        # two-sided p = 0.0120. The interval is essentially symmetric on the
+        # log scale, so log-scale asymmetry must be ~0.
+        result = reconstruct_from_ci(0.75, 0.60, 0.94, scale="ratio")
+
+        self.assertEqual(result["scale"], "ratio")
+        self.assertEqual(result["analysis_scale"], "log")
+        self.assertEqual(result["null_value"], 1.0)
+        self.assertAlmostEqual(result["analysis_estimate"], math.log(0.75), places=12)
+        self.assertAlmostEqual(result["standard_error_approx"], 0.11453, places=5)
+        self.assertAlmostEqual(result["z_statistic_approx"], -2.51184, places=5)
+        self.assertAlmostEqual(result["p_two_sided_approx"], 0.0120, delta=0.0001)
+        self.assertAlmostEqual(result["asymmetry_approx"], 0.0, delta=0.002)
+        self.assertAlmostEqual(result["asymmetry_ratio_approx"], 1.0, delta=0.02)
+        self.assertIsNone(result["scale_warning"])
+        self.assertIn("log scale", result["scale_note"])
+
+        back = result["back_transformed"]
+        self.assertAlmostEqual(back["estimate"], 0.75, places=12)
+        self.assertAlmostEqual(back["lower"], 0.60, places=12)
+        self.assertAlmostEqual(back["upper"], 0.94, places=12)
+        self.assertAlmostEqual(back["interval_geometric_mean"], 0.75, delta=0.002)
+        self.assertAlmostEqual(
+            back["standard_error_multiplicative"],
+            math.exp(result["standard_error_approx"]),
+            places=12,
+        )
+
+    def test_exactly_log_symmetric_ratio_has_zero_log_asymmetry(self):
+        result = reconstruct_from_ci(2.0, 1.0, 4.0, scale="ratio")
+
+        expected_se = math.log(2.0) / _CRITICAL_VALUE_95
+        self.assertAlmostEqual(result["asymmetry_approx"], 0.0, places=12)
+        self.assertAlmostEqual(result["asymmetry_ratio_approx"], 1.0, places=12)
+        self.assertAlmostEqual(result["standard_error_approx"], expected_se, places=12)
+        self.assertAlmostEqual(
+            result["z_statistic_approx"], math.log(2.0) / expected_se, places=12
+        )
+        self.assertAlmostEqual(back_geometric_mean(result), 2.0, places=12)
+
+    def test_ratio_scale_requires_strictly_positive_values(self):
+        invalid = ((0.0, -1.0, 1.0), (1.0, 0.0, 2.0), (-1.0, -2.0, -0.5))
+        for values in invalid:
+            with self.subTest(values=values):
+                with self.assertRaises(ValueError):
+                    reconstruct_from_ci(*values, scale="ratio")
+
+        with self.assertRaises(ValueError):
+            reconstruct_from_ci(0.75, 0.60, 0.94, scale="log")
+
+    def test_linear_path_is_unchanged_and_states_its_null(self):
+        result = reconstruct_from_ci(-4.04, -6.89, -1.18)
+
+        self.assertEqual(result["scale"], "linear")
+        self.assertEqual(result["analysis_scale"], "identity")
+        self.assertEqual(result["null_value"], 0.0)
+        self.assertIsNone(result["back_transformed"])
+        self.assertIsNone(result["scale_warning"])
+        self.assertAlmostEqual(result["standard_error_approx"], 1.456659, places=5)
+        self.assertAlmostEqual(result["p_two_sided_approx"], 0.0055, delta=0.0002)
+        self.assertIn("null of 0", result["scale_note"])
+
+    def test_linear_path_warns_when_the_input_looks_like_a_ratio(self):
+        warned = reconstruct_from_ci(0.75, 0.60, 0.94)
+        self.assertIsNotNone(warned["scale_warning"])
+        self.assertIn("--scale ratio", warned["scale_warning"])
+        # The heuristic only warns: the linear numbers are untouched.
+        self.assertAlmostEqual(warned["z_statistic_approx"], 0.75 / warned["standard_error_approx"], places=12)
+        self.assertEqual(warned["null_value"], 0.0)
+
+        for values in (
+            (-4.04, -6.89, -1.18),  # negative estimate: cannot be a ratio
+            (10.0, 8.0, 15.0),  # positive but asymmetric on the log scale too
+            (2.0, 1.0, 3.0),  # symmetric on the linear scale
+        ):
+            with self.subTest(values=values):
+                self.assertIsNone(reconstruct_from_ci(*values)["scale_warning"])
+
+    def test_ratio_cli_reports_both_scales_and_json_carries_the_warning(self):
+        ratio_text = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "verify_continuous_result.py"),
+                "ci",
+                "0.75",
+                "0.60",
+                "0.94",
+                "--scale",
+                "ratio",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("Scale: ratio (analysis scale: log)", ratio_text.stdout)
+        self.assertIn("Null value: 1", ratio_text.stdout)
+        self.assertIn("Log-scale estimate:", ratio_text.stdout)
+        self.assertIn("Approximate log-scale SE: 0.11453", ratio_text.stdout)
+        self.assertIn("Approximate two-sided p: 0.0120", ratio_text.stdout)
+        self.assertIn("Back-transformed:", ratio_text.stdout)
+        self.assertNotIn("WARNING", ratio_text.stdout)
+
+        linear_text = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "verify_continuous_result.py"),
+                "ci",
+                "0.75",
+                "0.60",
+                "0.94",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("Null value: 0", linear_text.stdout)
+        self.assertIn("WARNING:", linear_text.stdout)
+        self.assertIn("--scale ratio", linear_text.stdout)
+
+        linear_json = json.loads(
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_DIR / "verify_continuous_result.py"),
+                    "ci",
+                    "0.75",
+                    "0.60",
+                    "0.94",
+                    "--json",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+        )
+        self.assertIn("--scale ratio", linear_json["scale_warning"])
+        self.assertEqual(linear_json["null_value"], 0.0)
+
     def test_reconstructs_approximate_se_statistics_and_asymmetry(self):
         result = reconstruct_from_ci(-4.04, -6.89, -1.18)
 
