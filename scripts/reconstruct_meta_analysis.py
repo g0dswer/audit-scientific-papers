@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import NormalDist, median
 from typing import Sequence
@@ -51,10 +52,19 @@ VALID_OVERLAP_STATUSES = {
 }
 # Statuses that leave a declared possible overlap unresolved.
 UNRESOLVED_OVERLAP_STATUSES = {"", "unknown", "unresolved", "possible"}
+# A Wald standard error can only be recovered from a printed interval when the
+# interval is approximately centred on the estimate on the analysis scale.  The
+# fixture's largest asymmetry is 0.0867, so 0.10 is deliberately a named,
+# reviewable policy threshold rather than a numerical accident.
+CI_ASYMMETRY_MAX_RELATIVE = 0.10
+MAX_RELATIVE_CI_ASYMMETRY = CI_ASYMMETRY_MAX_RELATIVE
+
 # Degrees-of-freedom conventions for the random-effects prediction interval.
-# "k-2" follows the Cochrane Handbook, Higgins-Thompson-Spiegelhalter (2009), and
-# IntHout et al. (2016); "k-1" reproduces the older behaviour of this script.
-PREDICTION_DF_CONVENTIONS = ("k-2", "k-1")
+# k-1 is the current Cochrane/Review Manager convention.  k-2 is retained only
+# as an explicitly labelled historical Higgins--Thompson--Spiegelhalter option.
+PREDICTION_DF_CONVENTIONS = ("k-1", "k-2")
+CURRENT_PREDICTION_DF = "k-1"
+I2_METHOD = "Q_based_Higgins_Thompson"
 
 
 class MetaAnalysisError(ValueError):
@@ -111,6 +121,176 @@ def _parse_optional_float(value: object) -> float | None:
         return float(text)
     except ValueError as exc:
         raise MetaAnalysisError(f"Invalid numeric value: {value!r}") from exc
+
+
+def _validate_probability(value: object, label: str) -> float:
+    """Validate a requested confidence level before it reaches a quantile call."""
+    if isinstance(value, bool):
+        raise MetaAnalysisError(f"{label} must be finite and strictly between zero and one")
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise MetaAnalysisError(f"{label} must be finite and strictly between zero and one") from exc
+    if not math.isfinite(numeric) or not 0.0 < numeric < 1.0:
+        raise MetaAnalysisError(f"{label} must be finite and strictly between zero and one")
+    return numeric
+
+
+def record_row_key(record: MetaRecord) -> str:
+    """Return a deterministic identity key for one extracted study row.
+
+    The key intentionally includes the row's identity and source coordinates,
+    but not list position.  Plotting and tabular consumers can therefore verify
+    that a result belongs to the same row even when records are reordered.
+    """
+    payload = asdict(record)
+    # JSON gives stable field ordering and a deterministic representation for
+    # booleans/nulls; sort_keys also makes this resilient to dataclass evolution.
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+    digest = hashlib.sha256(encoded).hexdigest()[:20]
+    return f"{record.analysis_id}:{record.study_id}:{record.cohort_id}:{digest}"
+
+
+_REPRODUCTION_FIELDS = ("pooled", "ci_lower", "ci_upper", "k", "model", "scale")
+
+
+def _normalize_scale(value: object) -> str:
+    normalized = str(value).strip().lower()
+    if normalized in {"log_ratio", "ratio", "log", "hr", "rr", "or", "irr"}:
+        return "log_ratio"
+    if normalized in {"linear", "md", "smd"}:
+        return "linear"
+    return normalized
+
+
+def _reproduction_metric(
+    observed: object,
+    expected: object,
+    *,
+    log_ratio: bool,
+    absolute_tolerance: float,
+    relative_tolerance: float,
+) -> dict:
+    try:
+        observed_value = float(observed)
+        expected_value = float(expected)
+    except (TypeError, ValueError):
+        return {
+            "observed": observed,
+            "expected": expected,
+            "status": "FAIL",
+            "reason": "Both values must be finite numbers",
+        }
+    if not math.isfinite(observed_value) or not math.isfinite(expected_value):
+        return {
+            "observed": observed_value,
+            "expected": expected_value,
+            "status": "FAIL",
+            "reason": "Both values must be finite numbers",
+        }
+    if log_ratio and (observed_value <= 0.0 or expected_value <= 0.0):
+        return {
+            "observed": observed_value,
+            "expected": expected_value,
+            "status": "FAIL",
+            "reason": "Ratio-scale values must be positive for log comparison",
+        }
+    comparison_observed = math.log(observed_value) if log_ratio else observed_value
+    comparison_expected = math.log(expected_value) if log_ratio else expected_value
+    absolute_difference = abs(comparison_observed - comparison_expected)
+    relative_difference = absolute_difference / max(abs(comparison_expected), 1e-15)
+    passed = absolute_difference <= absolute_tolerance or relative_difference <= relative_tolerance
+    return {
+        "observed": observed_value,
+        "expected": expected_value,
+        "comparison_observed": comparison_observed,
+        "comparison_expected": comparison_expected,
+        "comparison_scale": "log" if log_ratio else "native",
+        "absolute_difference": absolute_difference,
+        "relative_difference": relative_difference,
+        "absolute_tolerance": absolute_tolerance,
+        "relative_tolerance": relative_tolerance,
+        "status": "PASS" if passed else "FAIL",
+    }
+
+
+def compare_reproduction(
+    observed: dict,
+    expected: dict | None,
+    *,
+    absolute_tolerance: float = 0.005,
+    relative_tolerance: float = 0.005,
+) -> dict:
+    """Compare a reconstruction gate on point, interval, k, model, and scale.
+
+    Missing expected fields produce ``NOT_CHECKED`` unless a supplied field
+    already fails, in which case the gate is ``FAIL``.  This preserves useful
+    diagnostics for a legacy point-only invocation while never treating an
+    incomplete gate as a successful reproduction.  Ratio values are compared
+    on the log scale, so tolerances have the same interpretation across HR/RR/OR
+    magnitudes.
+    """
+    if not math.isfinite(absolute_tolerance) or absolute_tolerance < 0.0:
+        raise MetaAnalysisError("Reproduction absolute tolerance must be finite and non-negative")
+    if not math.isfinite(relative_tolerance) or relative_tolerance < 0.0:
+        raise MetaAnalysisError("Reproduction relative tolerance must be finite and non-negative")
+
+    expected = expected or {}
+    missing = [field for field in _REPRODUCTION_FIELDS if expected.get(field) is None]
+    observed_scale = _normalize_scale(observed.get("scale"))
+    expected_scale = _normalize_scale(expected.get("scale")) if expected.get("scale") is not None else None
+    log_ratio = observed_scale == "log_ratio" or expected_scale == "log_ratio"
+    checks: dict[str, dict] = {}
+    for field in ("pooled", "ci_lower", "ci_upper"):
+        if field not in missing:
+            checks[field] = _reproduction_metric(
+                observed.get(field),
+                expected.get(field),
+                log_ratio=log_ratio,
+                absolute_tolerance=absolute_tolerance,
+                relative_tolerance=relative_tolerance,
+            )
+    if "k" not in missing:
+        checks["k"] = {
+            "observed": observed.get("k"),
+            "expected": expected.get("k"),
+            "status": "PASS" if observed.get("k") == expected.get("k") else "FAIL",
+        }
+    if "model" not in missing:
+        observed_model = str(observed.get("model", "")).strip().lower()
+        expected_model = str(expected.get("model", "")).strip().lower()
+        checks["model"] = {
+            "observed": observed_model,
+            "expected": expected_model,
+            "status": "PASS" if observed_model == expected_model else "FAIL",
+        }
+    if "scale" not in missing:
+        checks["scale"] = {
+            "observed": observed_scale,
+            "expected": expected_scale,
+            "status": "PASS" if observed_scale == expected_scale else "FAIL",
+        }
+
+    supplied_statuses = [check["status"] for check in checks.values()]
+    if any(status == "FAIL" for status in supplied_statuses):
+        status = "FAIL"
+    elif missing:
+        status = "NOT_CHECKED"
+    else:
+        status = "PASS"
+    pooled_check = checks.get("pooled", {})
+    return {
+        "status": status,
+        "checks": checks,
+        "missing_fields": missing,
+        "observed": observed.get("pooled"),
+        "expected": expected.get("pooled"),
+        "absolute_difference": pooled_check.get("absolute_difference"),
+        "relative_difference": pooled_check.get("relative_difference"),
+        "comparison_scale": pooled_check.get("comparison_scale", "log" if log_ratio else "native"),
+        "absolute_tolerance": absolute_tolerance,
+        "relative_tolerance": relative_tolerance,
+    }
 
 
 def load_records(path: str | Path) -> list[MetaRecord]:
@@ -194,6 +374,67 @@ def _validate_record(record: MetaRecord, line_number: int | None = None) -> None
         raise MetaAnalysisError(
             f"Per-row input_confidence must be strictly between zero and one{where}"
         )
+
+
+def dependency_state_issues(record: MetaRecord) -> list[dict[str, str]]:
+    """Return fail-closed dependency-state errors for one row.
+
+    ``participant_overlap_possible`` is a legacy Boolean retained for source
+    compatibility.  ``overlap_status`` is the canonical state.  The two may
+    not contradict each other, and the univariate engine never interprets
+    ``modeled`` as if it had a covariance matrix available.
+    """
+    status = record.overlap_status
+    possible = bool(record.participant_overlap_possible)
+    issues: list[dict[str, str]] = []
+    if status == "modeled":
+        issues.append(
+            {
+                "code": "DEPENDENCE_MODEL_NOT_SUPPORTED",
+                "message": (
+                    "The univariate inverse-variance engine cannot consume overlap_status='modeled'; "
+                    "supply a covariance-aware external model instead."
+                ),
+            }
+        )
+    if status in UNRESOLVED_OVERLAP_STATUSES and not possible:
+        issues.append(
+            {
+                "code": "CONTRADICTORY_DEPENDENCE_STATE",
+                "message": (
+                    f"overlap_status={status!r} requires participant_overlap_possible=true; "
+                    "the flag and status cannot contradict each other."
+                ),
+            }
+        )
+    if status == "none" and possible:
+        issues.append(
+            {
+                "code": "CONTRADICTORY_DEPENDENCE_STATE",
+                "message": (
+                    "overlap_status='none' requires participant_overlap_possible=false; "
+                    "the flag and status cannot contradict each other."
+                ),
+            }
+        )
+    if status == "modeled" and not possible:
+        issues.append(
+            {
+                "code": "CONTRADICTORY_DEPENDENCE_STATE",
+                "message": (
+                    "overlap_status='modeled' requires participant_overlap_possible=true; "
+                    "the flag and status cannot contradict each other."
+                ),
+            }
+        )
+    if status == "resolved_duplicate_removed" and record.include_published:
+        issues.append(
+            {
+                "code": "REMOVED_DUPLICATE_STILL_INCLUDED",
+                "message": "A row marked as a removed duplicate cannot remain included.",
+            }
+        )
+    return issues
 
 
 def filter_records(
@@ -417,10 +658,25 @@ def _analysis_vectors(
         z_value = _source_critical_z(row_confidence)
         if scale == "ratio":
             value = math.log(record.effect)
-            standard_error = (math.log(record.upper) - math.log(record.lower)) / (2.0 * z_value)
+            lower_half_width = value - math.log(record.lower)
+            upper_half_width = math.log(record.upper) - value
+            standard_error = (lower_half_width + upper_half_width) / (2.0 * z_value)
         else:
             value = record.effect
-            standard_error = (record.upper - record.lower) / (2.0 * z_value)
+            lower_half_width = value - record.lower
+            upper_half_width = record.upper - value
+            standard_error = (lower_half_width + upper_half_width) / (2.0 * z_value)
+        half_width_total = lower_half_width + upper_half_width
+        if not math.isfinite(half_width_total) or half_width_total <= 0:
+            raise MetaAnalysisError(f"Invalid confidence interval width for {record.study_id}")
+        relative_asymmetry = abs(lower_half_width - upper_half_width) / half_width_total
+        if relative_asymmetry > CI_ASYMMETRY_MAX_RELATIVE:
+            scale_label = "log ratio" if scale == "ratio" else "linear"
+            raise MetaAnalysisError(
+                f"Materially asymmetric confidence interval for {record.study_id} on the {scale_label} "
+                f"scale (relative asymmetry {relative_asymmetry:.4g} > "
+                f"{CI_ASYMMETRY_MAX_RELATIVE:.3g}); provide a source standard error or model output"
+            )
         if not math.isfinite(standard_error) or standard_error <= 0:
             raise MetaAnalysisError(f"Invalid reconstructed standard error for {record.study_id}")
         values.append(value)
@@ -437,12 +693,14 @@ def meta_analysis(
     inference: str = "normal",
     confidence: float = 0.95,
     input_confidence: float = 0.95,
-    prediction_df: str = "k-2",
+    prediction_df: str = CURRENT_PREDICTION_DF,
     allow_mixed_estimands: bool = False,
     allow_dependence: bool = False,
     leave_one_out: bool = False,
 ) -> dict:
     """Fit an intercept-only aggregate inverse-variance meta-analysis."""
+    confidence = _validate_probability(confidence, "Output confidence")
+    input_confidence = _validate_probability(input_confidence, "Input confidence")
     if len(records) < 2:
         raise MetaAnalysisError("At least two study estimates are required")
     analysis_ids = {record.analysis_id for record in records}
@@ -452,6 +710,12 @@ def meta_analysis(
         )
     for record in records:
         _validate_record(record)
+        dependency_errors = dependency_state_issues(record)
+        if dependency_errors:
+            # Dependency state is enforced here, rather than only by the
+            # optional dataset validator, because this is the univariate
+            # engine's trust boundary.
+            raise MetaAnalysisError(dependency_errors[0]["message"])
     measures = sorted({record.measure for record in records})
     warnings: list[str] = []
     if len(measures) > 1:
@@ -574,7 +838,7 @@ def meta_analysis(
 
     prediction_convention = str(prediction_df).strip().lower()
     if prediction_convention not in PREDICTION_DF_CONVENTIONS:
-        raise MetaAnalysisError("prediction_df must be k-2 or k-1")
+        raise MetaAnalysisError("prediction_df must be k-1 (current) or k-2 (historical)")
     prediction_degrees_of_freedom: int | None = len(values) - (
         2 if prediction_convention == "k-2" else 1
     )
@@ -591,15 +855,34 @@ def meta_analysis(
         )
         prediction_degrees_of_freedom = None
     else:
-        prediction_critical = _student_t_quantile(
-            1.0 - (1.0 - confidence) / 2.0, prediction_degrees_of_freedom
-        )
+        if prediction_convention == CURRENT_PREDICTION_DF and normalized_inference == "NORMAL":
+            prediction_critical = NormalDist().inv_cdf(1.0 - (1.0 - confidence) / 2.0)
+            prediction_multiplier_distribution = "normal"
+            prediction_method = "current_Cochrane_RevMan_Wald_normal"
+        else:
+            prediction_critical = _student_t_quantile(
+                1.0 - (1.0 - confidence) / 2.0, prediction_degrees_of_freedom
+            )
+            prediction_multiplier_distribution = "student_t"
+            if prediction_convention == CURRENT_PREDICTION_DF:
+                prediction_method = "current_Cochrane_RevMan_HKSJ_t_k-1"
+            else:
+                prediction_method = "historical_Higgins_Thompson_Spiegelhalter_t_k-2"
         # A prediction interval describes the distribution of true effects, so it is
         # always built from the conventional inverse-variance standard error and never
         # from an inference-specific (for example HKSJ) standard error.
         prediction_se = math.sqrt(conventional_se * conventional_se + tau2)
         prediction_lower_linear = pooled_linear - prediction_critical * prediction_se
         prediction_upper_linear = pooled_linear + prediction_critical * prediction_se
+
+    if prediction_lower_linear is None:
+        prediction_multiplier_distribution = None
+        prediction_method = None
+        prediction_df_label = None
+    elif prediction_convention == CURRENT_PREDICTION_DF:
+        prediction_df_label = "current_Cochrane_RevMan_k-1"
+    else:
+        prediction_df_label = "historical_Higgins_Thompson_Spiegelhalter_k-2"
 
     transform = math.exp if scale == "ratio" else lambda value: value
     cohort_cluster_count = len({record.cohort_id for record in records})
@@ -628,15 +911,24 @@ def meta_analysis(
         "Q_degrees_of_freedom": degrees_of_freedom,
         "tau2": tau2,
         "I2_percent": i2,
+        "I2_method": I2_METHOD,
         "hksj_scale_q": hksj_q,
         "prediction_df_convention": prediction_convention,
+        "prediction_df_label": prediction_df_label,
         "prediction_interval_df": prediction_degrees_of_freedom,
+        "prediction_multiplier_distribution": prediction_multiplier_distribution,
+        "prediction_interval_method": prediction_method,
         "prediction_not_estimable_reason": prediction_reason,
         "prediction_lower": transform(prediction_lower_linear) if prediction_lower_linear is not None else None,
         "prediction_upper": transform(prediction_upper_linear) if prediction_upper_linear is not None else None,
         "warnings": warnings,
         "study_weights_percent": [
-            {"study_id": record.study_id, "cohort_id": record.cohort_id, "weight": weight / sum(weights) * 100.0}
+            {
+                "row_key": record_row_key(record),
+                "study_id": record.study_id,
+                "cohort_id": record.cohort_id,
+                "weight": weight / sum(weights) * 100.0,
+            }
             for record, weight in zip(records, weights)
         ],
     }
@@ -713,7 +1005,7 @@ def run_sensitivity_ladder(
     common_measure: str | None = None,
     confidence: float = 0.95,
     input_confidence: float = 0.95,
-    prediction_df: str = "k-2",
+    prediction_df: str = CURRENT_PREDICTION_DF,
     allow_dependence: bool = False,
     allow_mixed_estimands: bool = False,
 ) -> list[dict]:
@@ -772,6 +1064,9 @@ def run_sensitivity_ladder(
         common_measure=measure,
         published_only=False,
     )
+    # S5 is the clean reference population.  Method and influence rungs are
+    # cumulative: reintroducing exposure rows here would change the population
+    # while pretending to change only the estimator/inference method.
     direct_exposure = filter_records(
         direct_common,
         direct_exposures_only=True,
@@ -816,7 +1111,7 @@ def run_sensitivity_ladder(
             "result": dict(random_only_skip)
             if normalized_model == "fixed"
             else {
-                method: fit(direct_common, tau2_method=method, allow_mixed_estimands=False)
+                method: fit(direct_exposure, tau2_method=method, allow_mixed_estimands=False)
                 for method in ("DL", "PM", "REML")
             },
         },
@@ -825,12 +1120,12 @@ def run_sensitivity_ladder(
             "description": "Hartung-Knapp-Sidik-Jonkman inference on the clean common-measure model",
             "result": dict(random_only_skip)
             if normalized_model == "fixed"
-            else fit(direct_common, inference="HKSJ", allow_mixed_estimands=False),
+            else fit(direct_exposure, inference="HKSJ", allow_mixed_estimands=False),
         },
         {
             "id": "S8_leave_one_cluster_out",
             "description": "Delete and refit one independent cohort cluster at a time",
-            "result": fit(direct_common, leave_one_out=True, allow_mixed_estimands=False),
+            "result": fit(direct_exposure, leave_one_out=True, allow_mixed_estimands=False),
         },
     ]
     for step in ladder:
@@ -842,13 +1137,15 @@ def _human_summary(result: dict) -> str:
     lines = [
         f"Pooled effect: {result['pooled']:.6g} ({result['confidence']:.0%} CI {result['ci_lower']:.6g} to {result['ci_upper']:.6g})",
         f"Model: {result['model']}; tau-squared method: {result['tau2_method']}; inference: {result['inference']}",
-        f"k={result['k']}; Q={result['Q']:.6g}; tau-squared={result['tau2']:.6g}; I-squared={result['I2_percent']:.2f}%",
+        f"k={result['k']}; Q={result['Q']:.6g}; tau-squared={result['tau2']:.6g}; "
+        f"I-squared={result['I2_percent']:.2f}% ({result['I2_method']})",
     ]
     if result["prediction_lower"] is not None:
+        multiplier = result.get("prediction_multiplier_distribution", "student_t")
         lines.append(
             f"Prediction interval: {result['prediction_lower']:.6g} to {result['prediction_upper']:.6g} "
-            f"(Student t on {result['prediction_interval_df']} degrees of freedom; "
-            f"convention {result['prediction_df_convention']})"
+            f"({multiplier} multiplier; df metadata {result['prediction_interval_df']}; "
+            f"method {result['prediction_interval_method']})"
         )
     elif result.get("prediction_not_estimable_reason"):
         lines.append(
@@ -864,11 +1161,24 @@ def _human_sensitivity_summary(payload: dict) -> str:
     reproduction = payload.get("published_reproduction")
     lines = [f"Sensitivity status: {payload['sensitivity_status']}"]
     if reproduction:
-        lines.append(
-            f"Published reconstruction: {reproduction['status']} "
-            f"(observed {reproduction['observed']:.6g}; expected {reproduction['expected']:.6g}; "
-            f"absolute difference {reproduction['absolute_difference']:.6g})"
-        )
+        if reproduction.get("observed") is not None and reproduction.get("expected") is not None:
+            absolute_difference = reproduction.get("absolute_difference")
+            relative_difference = reproduction.get("relative_difference")
+            difference_text = (
+                f"absolute difference {absolute_difference:.6g}; relative difference {relative_difference:.6g}"
+                if absolute_difference is not None and relative_difference is not None
+                else "difference not available"
+            )
+            lines.append(
+                f"Published reconstruction: {reproduction['status']} "
+                f"(observed {reproduction['observed']:.6g}; expected {reproduction['expected']:.6g}; "
+                f"{difference_text})"
+            )
+        else:
+            lines.append(
+                f"Published reconstruction: {reproduction['status']} "
+                f"(missing expected fields: {', '.join(reproduction.get('missing_fields', []))})"
+            )
     for step in payload.get("sensitivity_ladder", []):
         result = step["result"]
         model = step.get("model") or (result.get("model") if isinstance(result, dict) else None)
@@ -885,6 +1195,18 @@ def _human_sensitivity_summary(payload: dict) -> str:
     if payload["sensitivity_status"].startswith("BLOCKED"):
         lines.append("Do not interpret sensitivity analyses until the reproduction discrepancy is explained.")
     return "\n".join(lines)
+
+
+def _expected_reproduction_from_args(args: argparse.Namespace) -> dict | None:
+    values = {
+        "pooled": args.expected_pooled,
+        "ci_lower": args.expected_ci_lower,
+        "ci_upper": args.expected_ci_upper,
+        "k": args.expected_k,
+        "model": args.expected_model,
+        "scale": args.expected_scale,
+    }
+    return values if any(value is not None for value in values.values()) else None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -904,11 +1226,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--prediction-df",
         choices=PREDICTION_DF_CONVENTIONS,
-        default="k-2",
+        default=CURRENT_PREDICTION_DF,
         help=(
             "Degrees-of-freedom convention for the random-effects prediction interval: "
-            "k-2 follows the Cochrane Handbook and Higgins-Thompson-Spiegelhalter; k-1 "
-            "reproduces the earlier behaviour of this script"
+            "k-1 is the current Cochrane/Review Manager option (Wald uses normal and "
+            "HKSJ uses t); k-2 is the historical Higgins-Thompson-Spiegelhalter option"
         ),
     )
     parser.add_argument("--direct-outcomes-only", action="store_true")
@@ -921,7 +1243,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--forest", type=Path)
     parser.add_argument("--title", default="Meta-analysis reconstruction")
     parser.add_argument("--expected-pooled", type=float)
-    parser.add_argument("--reproduction-tolerance", type=float, default=0.005)
+    parser.add_argument("--expected-ci-lower", type=float)
+    parser.add_argument("--expected-ci-upper", type=float)
+    parser.add_argument("--expected-k", type=int)
+    parser.add_argument("--expected-model", choices=("fixed", "random"))
+    parser.add_argument("--expected-scale")
+    parser.add_argument(
+        "--reproduction-tolerance",
+        type=float,
+        default=None,
+        help="Deprecated alias for --reproduction-absolute-tolerance",
+    )
+    parser.add_argument("--reproduction-absolute-tolerance", type=float, default=0.005)
+    parser.add_argument("--reproduction-relative-tolerance", type=float, default=0.005)
     parser.add_argument("--json", action="store_true")
     return parser
 
@@ -952,26 +1286,34 @@ def main(argv: Sequence[str] | None = None) -> int:
                 allow_mixed_estimands=args.allow_mixed_estimands,
                 allow_dependence=args.allow_dependence,
             )
-            reproduction = None
-            if args.expected_pooled is not None:
-                absolute_difference = abs(published["pooled"] - args.expected_pooled)
-                reproduction = {
-                    "observed": published["pooled"],
-                    "expected": args.expected_pooled,
-                    "absolute_difference": absolute_difference,
-                    "tolerance": args.reproduction_tolerance,
-                    "status": "PASS" if absolute_difference <= args.reproduction_tolerance else "FAIL",
-                }
-            if reproduction and reproduction["status"] == "FAIL":
+            expected = _expected_reproduction_from_args(args)
+            absolute_tolerance = (
+                args.reproduction_tolerance
+                if args.reproduction_tolerance is not None
+                else args.reproduction_absolute_tolerance
+            )
+            reproduction = compare_reproduction(
+                published,
+                expected,
+                absolute_tolerance=absolute_tolerance,
+                relative_tolerance=args.reproduction_relative_tolerance,
+            )
+            if reproduction["status"] != "PASS":
                 exit_status = 2
                 result = {
                     "published_reconstruction": reproduction,
-                    "sensitivity_status": "BLOCKED_REPRODUCTION_FAILURE",
+                    "reproduction_status": reproduction["status"],
+                    "sensitivity_status": (
+                        "NOT_CHECKED"
+                        if reproduction["status"] == "NOT_CHECKED"
+                        else "BLOCKED_REPRODUCTION_FAILURE"
+                    ),
                     "sensitivity_ladder": [],
                 }
             else:
                 result = {
                     "published_reconstruction": reproduction,
+                    "reproduction_status": reproduction["status"],
                     "sensitivity_status": "READY",
                     "sensitivity_ladder": run_sensitivity_ladder(
                         base_records,
@@ -1007,15 +1349,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 allow_dependence=args.allow_dependence,
                 leave_one_out=args.leave_one_out,
             )
-            if args.expected_pooled is not None:
-                absolute_difference = abs(result["pooled"] - args.expected_pooled)
-                result["published_reproduction"] = {
-                    "expected": args.expected_pooled,
-                    "absolute_difference": absolute_difference,
-                    "tolerance": args.reproduction_tolerance,
-                    "status": "PASS" if absolute_difference <= args.reproduction_tolerance else "FAIL",
-                }
-                if result["published_reproduction"]["status"] == "FAIL":
+            expected = _expected_reproduction_from_args(args)
+            if expected is not None:
+                absolute_tolerance = (
+                    args.reproduction_tolerance
+                    if args.reproduction_tolerance is not None
+                    else args.reproduction_absolute_tolerance
+                )
+                result["published_reproduction"] = compare_reproduction(
+                    result,
+                    expected,
+                    absolute_tolerance=absolute_tolerance,
+                    relative_tolerance=args.reproduction_relative_tolerance,
+                )
+                result["reproduction_status"] = result["published_reproduction"]["status"]
+                if result["published_reproduction"]["status"] != "PASS":
                     exit_status = 2
             if args.forest:
                 from plot_forest import write_forest_svg

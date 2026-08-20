@@ -1,3 +1,4 @@
+import builtins
 import contextlib
 import io
 import json
@@ -9,6 +10,7 @@ import types
 import unittest
 from pathlib import Path
 from statistics import NormalDist
+from unittest import mock
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -400,7 +402,7 @@ class BinaryEffectTests(unittest.TestCase):
 
 
 class FisherOptionalDependencyTests(unittest.TestCase):
-    """The optional SciPy path must degrade, never crash the calculator."""
+    """A missing optional SciPy degrades; installed-code failures stay visible."""
 
     def setUp(self):
         self._saved = {
@@ -424,10 +426,16 @@ class FisherOptionalDependencyTests(unittest.TestCase):
         sys.modules["scipy.stats"] = stats
 
     def test_absent_scipy_degrades_to_none(self):
-        sys.modules.pop("scipy", None)
-        sys.modules.pop("scipy.stats", None)
-        self.assertIsNone(_fisher_exact_two_sided(15, 100, 5, 100))
-        self.assertIsNone(analyze_binary(15, 100, 5, 100)["fisher_exact_p_two_sided"])
+        real_import = builtins.__import__
+
+        def block_scipy(name, globals=None, locals=None, fromlist=(), level=0):
+            if name in {"scipy", "scipy.stats"}:
+                raise ModuleNotFoundError("No module named 'scipy'", name="scipy")
+            return real_import(name, globals, locals, fromlist, level)
+
+        with mock.patch("builtins.__import__", side_effect=block_scipy):
+            self.assertIsNone(_fisher_exact_two_sided(15, 100, 5, 100))
+            self.assertIsNone(analyze_binary(15, 100, 5, 100)["fisher_exact_p_two_sided"])
 
     def test_modern_scipy_result_object_is_used(self):
         class SignificanceResult(tuple):
@@ -447,15 +455,15 @@ class FisherOptionalDependencyTests(unittest.TestCase):
             analyze_binary(15, 100, 5, 100)["fisher_exact_p_two_sided"], 0.0325, places=12
         )
 
-    def test_raising_scipy_does_not_break_the_calculator(self):
+    def test_raising_scipy_is_not_silently_downgraded(self):
         def explode(table, alternative=None):
             raise RuntimeError("legacy SciPy failure")
 
         self._install_fake_scipy(explode)
-        self.assertIsNone(_fisher_exact_two_sided(15, 100, 5, 100))
-        result = analyze_binary(15, 100, 5, 100)
-        self.assertIsNone(result["fisher_exact_p_two_sided"])
-        self.assertAlmostEqual(result["risk_ratio"], 3.0, places=12)
+        with self.assertRaisesRegex(RuntimeError, "legacy SciPy failure"):
+            _fisher_exact_two_sided(15, 100, 5, 100)
+        with self.assertRaisesRegex(RuntimeError, "legacy SciPy failure"):
+            analyze_binary(15, 100, 5, 100)
 
 
 class ContinuousResultTests(unittest.TestCase):

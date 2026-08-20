@@ -207,6 +207,12 @@ python3 scripts/reconstruct_meta_analysis.py meta_data.csv \
   --common-measure HR \
   --sensitivity all \
   --allow-mixed-estimands \
+  --expected-pooled PUBLISHED_VALUE \
+  --expected-ci-lower PUBLISHED_LOWER \
+  --expected-ci-upper PUBLISHED_UPPER \
+  --expected-k PUBLISHED_STUDY_COUNT \
+  --expected-model random \
+  --expected-scale ratio \
   --json
 ```
 
@@ -214,14 +220,18 @@ Use the override only if the publication mixed ratio measures in the headline po
 the source interval level (`--input-confidence`, default 0.95, overridable per row with an
 `input_confidence` column) separate from the requested output interval (`--confidence`).
 Require one `analysis_id`; never combine separate forest plots simply because they share a
-CSV.
+CSV. A sensitivity run is `NOT_CHECKED` and remains blocked unless the published point,
+both interval bounds, study count, model, and scale are all supplied and match within the
+declared absolute or relative tolerance. Ratio results are compared on the log scale.
 
 Reconstruct the published pool with the model the authors used. `--model fixed` is honoured
 throughout the sensitivity ladder, so the published-reconstruction rung reproduces the
 model the reproduction gate validated; the random-effects-only rungs report
 `NOT_ASSESSABLE` instead of quietly switching models. Prediction intervals default to the
-Cochrane `k - 2` degrees-of-freedom convention (`--prediction-df k-1` for the alternative);
-always report which convention produced the interval you quote.
+current Cochrane/Review Manager convention: Wald uses a normal multiplier and HKSJ uses
+Student's t with `k - 1` degrees of freedom. Use `--prediction-df k-2` only to reproduce
+the historical Higgins–Thompson–Spiegelhalter convention, and always report which method
+produced the interval you quote.
 
 Do not automatically convert hazard ratios, risk ratios, and odds ratios. If compatible
 native estimates cannot be isolated, prefer separate pools or structured synthesis without

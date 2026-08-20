@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from fractions import Fraction
 from numbers import Integral, Real
 from statistics import NormalDist
 from typing import Any
@@ -95,10 +96,17 @@ def newcombe_difference_interval(
     return max(-1.0, lower), min(1.0, upper)
 
 
-def _ceil_positive(value: float | None) -> int | None:
+def _ceil_positive(value: float | Fraction | None) -> int | None:
     """Conservatively round a positive NNT/NNH away from zero."""
 
-    if value is None or not math.isfinite(value) or value <= 0.0:
+    if value is None or value <= 0:
+        return None
+    if isinstance(value, Fraction):
+        # NNT/NNH values computed from integer counts are exact rational
+        # numbers.  Taking the ceiling while they are still a Fraction avoids
+        # turning an exact integer such as 12 into 12.000000000000004.
+        return (value.numerator + value.denominator - 1) // value.denominator
+    if not math.isfinite(value):
         return None
     nearest_integer = round(value)
     if nearest_integer > 0 and abs(value - nearest_integer) <= math.ulp(float(nearest_integer)):
@@ -176,28 +184,40 @@ def _odds_ratio_interval(
 def _fisher_exact_two_sided(e1: int, n1: int, e0: int, n0: int) -> float | None:
     """Return SciPy's optional two-sided Fisher value, or None if unavailable.
 
-    SciPy is an optional dependency, so no failure in this path may break the
-    rest of the analysis.  SciPy 1.10 and later return a ``SignificanceResult``
+    SciPy is an optional dependency.  Only an actually missing SciPy import is
+    treated as an unavailable optional result.  A broken installation, an
+    incompatible API, or a calculation failure is allowed to propagate so
+    that callers can distinguish "not installed" from a programming or
+    numerical error.  SciPy 1.10 and later return a ``SignificanceResult``
     carrying ``.pvalue``; earlier releases returned a bare
-    ``(odds_ratio, p_value)`` tuple.  Both shapes are accepted, and any other
-    failure (missing module, changed signature, numerical error) degrades to
-    ``None``.
+    ``(odds_ratio, p_value)`` tuple.  Both shapes are accepted.
     """
 
     try:
         from scipy.stats import fisher_exact  # type: ignore
+    except ModuleNotFoundError as error:
+        # Do not mask a missing transitive dependency (for example numpy) or
+        # any other import problem as if SciPy simply were not installed.
+        if error.name == "scipy" or (error.name and error.name.startswith("scipy.")):
+            return None
+        raise
+    except ImportError as error:
+        # A genuine missing SciPy package can be reported as ImportError by a
+        # custom importer.  Import errors from an installed/broken package are
+        # deliberately not swallowed.
+        if error.name == "scipy" or (error.name and error.name.startswith("scipy.")):
+            return None
+        raise
 
-        table = [[e1, n1 - e1], [e0, n0 - e0]]
-        outcome = fisher_exact(table, alternative="two-sided")
-        p_value = getattr(outcome, "pvalue", None)
-        if p_value is None:
-            # Legacy SciPy (< 1.10) returned a plain (odds_ratio, p_value) tuple.
-            p_value = outcome[1]
-        p_value = float(p_value)
-    except Exception:
-        return None
+    table = [[e1, n1 - e1], [e0, n0 - e0]]
+    outcome = fisher_exact(table, alternative="two-sided")
+    p_value = getattr(outcome, "pvalue", None)
+    if p_value is None:
+        # Legacy SciPy (< 1.10) returned a plain (odds_ratio, p_value) tuple.
+        p_value = outcome[1]
+    p_value = float(p_value)
     if not math.isfinite(p_value):
-        return None
+        raise ValueError("SciPy returned a non-finite Fisher exact p-value")
     return p_value
 
 
@@ -297,22 +317,35 @@ def analyze_binary(
     else:
         classification = "inconclusive_crosses_zero"
 
-    if signed_difference > 0.0:
+    # Keep the point reciprocal on an exact count-derived scale.  The float
+    # risk difference above remains the public numerical effect, but using it
+    # for the reciprocal can turn an exact integer (for example 1/(5/10-5/12)
+    # = 12) into a value infinitesimally above the integer and incorrectly
+    # round it up.
+    exact_risk_difference = Fraction(e1, n1) - Fraction(e0, n0)
+    exact_signed_difference = (1 if beneficial else -1) * exact_risk_difference
+    if exact_signed_difference > 0:
         point_label = "NNT"
-        point_unrounded = 1.0 / signed_difference
-    elif signed_difference < 0.0:
+        point_unrounded_exact = Fraction(1, 1) / exact_signed_difference
+    elif exact_signed_difference < 0:
         point_label = "NNH"
-        point_unrounded = 1.0 / abs(signed_difference)
+        point_unrounded_exact = Fraction(1, 1) / abs(exact_signed_difference)
     else:
         point_label = None
-        point_unrounded = None
+        point_unrounded_exact = None
+
+    point_unrounded = (
+        float(point_unrounded_exact) if point_unrounded_exact is not None else None
+    )
 
     point_estimate = {
         "label": point_label,
         "unrounded": point_unrounded,
-        "rounded": _ceil_positive(point_unrounded),
+        "rounded": _ceil_positive(point_unrounded_exact),
         "exploratory": classification == "inconclusive_crosses_zero",
     }
+    if point_unrounded_exact is not None:
+        point_estimate["exact_fraction"] = str(point_unrounded_exact)
     reciprocal_interval = _reciprocal_interval(signed_lower, signed_upper)
     split_interval = (
         _split_reciprocal_interval(signed_lower, signed_upper)
