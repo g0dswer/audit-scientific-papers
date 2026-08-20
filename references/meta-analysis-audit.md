@@ -68,12 +68,20 @@ python3 scripts/reconstruct_meta_analysis.py meta_data.csv \
   --tau2 DL \
   --allow-mixed-estimands \
   --expected-pooled PUBLISHED_VALUE \
+  --expected-ci-lower PUBLISHED_LOWER \
+  --expected-ci-upper PUBLISHED_UPPER \
+  --expected-k PUBLISHED_STUDY_COUNT \
+  --expected-model random \
+  --expected-scale ratio \
   --json
 ```
 
 `--allow-mixed-estimands` is permitted only to reconstruct a publication that actually
-mixed effect measures. It emits a warning and never validates that choice. Record the
-article value, reconstructed value, absolute difference, heterogeneity, and status.
+mixed effect measures. It emits a warning and never validates that choice. The gate checks
+the point estimate, both confidence bounds, study count, model, and scale. A missing field
+produces `NOT_CHECKED`, any mismatch produces `FAIL`, and only a complete match produces
+`PASS`. Record the article and reconstructed values, absolute and relative differences,
+heterogeneity, and status. Ratio-scale numerical comparisons are performed after logging.
 
 If reproduction fails, stop interpreting sensitivity analyses until likely causes have
 been checked: transcription, rounding, confidence level, effect scale, standard-error
@@ -143,6 +151,12 @@ python3 scripts/reconstruct_meta_analysis.py meta_data.csv \
   --common-measure HR \
   --sensitivity all \
   --allow-mixed-estimands \
+  --expected-pooled PUBLISHED_VALUE \
+  --expected-ci-lower PUBLISHED_LOWER \
+  --expected-ci-upper PUBLISHED_UPPER \
+  --expected-k PUBLISHED_STUDY_COUNT \
+  --expected-model random \
+  --expected-scale ratio \
   --json
 
 python3 scripts/compare_meta_models.py meta_data.csv \

@@ -302,14 +302,24 @@ class MetaAnalysisGuardrailTests(unittest.TestCase):
         hksj = meta_analysis(records, tau2_method="DL", inference="HKSJ")
         self.assertAlmostEqual(normal["ci_lower"], 0.9006422182365167, delta=1e-12)
         self.assertAlmostEqual(normal["ci_upper"], 1.0047111625274052, delta=1e-12)
-        # Default convention is Student t on k-2 degrees of freedom (Cochrane
-        # Handbook; Higgins-Thompson-Spiegelhalter 2009; IntHout 2016).
-        self.assertEqual(normal["prediction_df_convention"], "k-2")
-        self.assertEqual(normal["prediction_interval_df"], 11)
-        self.assertAlmostEqual(normal["prediction_lower"], 0.8263473638682611, delta=1e-12)
-        self.assertAlmostEqual(normal["prediction_upper"], 1.0950422663294554, delta=1e-12)
+        # Current Cochrane/Review Manager behavior: Wald uses a normal
+        # multiplier, while HKSJ uses Student t with k-1 degrees of freedom.
+        self.assertEqual(normal["prediction_df_convention"], "k-1")
+        self.assertEqual(normal["prediction_interval_df"], 12)
+        self.assertEqual(normal["prediction_multiplier_distribution"], "normal")
+        self.assertEqual(
+            normal["prediction_interval_method"], "current_Cochrane_RevMan_Wald_normal"
+        )
+        self.assertAlmostEqual(normal["prediction_lower"], 0.8391840123987923, delta=1e-12)
+        self.assertAlmostEqual(normal["prediction_upper"], 1.0782918605885656, delta=1e-12)
         self.assertAlmostEqual(hksj["ci_lower"], 0.8760814699052611, delta=1e-12)
         self.assertAlmostEqual(hksj["ci_upper"], 1.0328780155611845, delta=1e-12)
+        self.assertEqual(hksj["prediction_multiplier_distribution"], "student_t")
+        self.assertEqual(
+            hksj["prediction_interval_method"], "current_Cochrane_RevMan_HKSJ_t_k-1"
+        )
+        self.assertAlmostEqual(hksj["prediction_lower"], 0.827520002447162, delta=1e-12)
+        self.assertAlmostEqual(hksj["prediction_upper"], 1.0934905348870398, delta=1e-12)
 
     def test_prediction_interval_conventions_and_degenerate_degrees_of_freedom(self):
         records = filter_records(
@@ -318,14 +328,17 @@ class MetaAnalysisGuardrailTests(unittest.TestCase):
             direct_outcomes_only=True,
             common_measure="HR",
         )
-        legacy = meta_analysis(records, tau2_method="DL", inference="normal", prediction_df="k-1")
-        self.assertEqual(legacy["prediction_df_convention"], "k-1")
-        self.assertEqual(legacy["prediction_interval_df"], 12)
-        self.assertAlmostEqual(legacy["prediction_lower"], 0.8275200024471621, delta=1e-12)
-        self.assertAlmostEqual(legacy["prediction_upper"], 1.0934905348870398, delta=1e-12)
+        historical = meta_analysis(
+            records, tau2_method="DL", inference="normal", prediction_df="k-2"
+        )
+        self.assertEqual(historical["prediction_df_convention"], "k-2")
+        self.assertEqual(historical["prediction_interval_df"], 11)
+        self.assertEqual(historical["prediction_multiplier_distribution"], "student_t")
+        self.assertAlmostEqual(historical["prediction_lower"], 0.8263473638682611, delta=1e-12)
+        self.assertAlmostEqual(historical["prediction_upper"], 1.0950422663294552, delta=1e-12)
         with self.assertRaisesRegex(MetaAnalysisError, "prediction_df must be"):
             meta_analysis(records, prediction_df="k-3")
-        pair = meta_analysis(records[:2])
+        pair = meta_analysis(records[:2], prediction_df="k-2")
         self.assertIsNone(pair["prediction_lower"])
         self.assertIsNone(pair["prediction_interval_df"])
         self.assertIn("not estimable", pair["prediction_not_estimable_reason"])
@@ -333,7 +346,7 @@ class MetaAnalysisGuardrailTests(unittest.TestCase):
             meta_analysis(records[:2], prediction_df="k-1")["prediction_interval_df"], 1
         )
 
-    def test_prediction_interval_does_not_depend_on_hksj_inference(self):
+    def test_prediction_interval_uses_conventional_se_and_method_specific_multiplier(self):
         records = filter_records(
             self.records,
             analysis_id="total_all_cause",
@@ -343,10 +356,15 @@ class MetaAnalysisGuardrailTests(unittest.TestCase):
         normal = meta_analysis(records, tau2_method="DL", inference="normal")
         hksj = meta_analysis(records, tau2_method="DL", inference="HKSJ")
         self.assertAlmostEqual(normal["tau2"], hksj["tau2"], delta=1e-14)
-        # The prediction interval describes the distribution of true effects and is
-        # always built from the conventional standard error.
-        self.assertAlmostEqual(hksj["prediction_lower"], normal["prediction_lower"], delta=1e-14)
-        self.assertAlmostEqual(hksj["prediction_upper"], normal["prediction_upper"], delta=1e-14)
+        self.assertAlmostEqual(
+            normal["conventional_standard_error_linear"],
+            hksj["conventional_standard_error_linear"],
+            delta=1e-14,
+        )
+        self.assertEqual(normal["prediction_multiplier_distribution"], "normal")
+        self.assertEqual(hksj["prediction_multiplier_distribution"], "student_t")
+        self.assertLess(hksj["prediction_lower"], normal["prediction_lower"])
+        self.assertGreater(hksj["prediction_upper"], normal["prediction_upper"])
 
     def test_degenerate_hksj_scale_factor_is_not_estimable(self):
         source = filter_records(self.records, analysis_id="total_all_cause", common_measure="HR")[:3]
@@ -582,7 +600,12 @@ class MetaAnalysisGuardrailTests(unittest.TestCase):
     def test_forest_omits_the_null_line_when_it_is_off_scale(self):
         source = filter_records(self.records, analysis_id="total_all_cause", common_measure="HR")[:3]
         far = [
-            replace(record, effect=2.0 + index, lower=1.8 + index, upper=2.4 + index)
+            replace(
+                record,
+                effect=2.0 + index,
+                lower=(2.0 + index) / 1.2,
+                upper=(2.0 + index) * 1.2,
+            )
             for index, record in enumerate(source)
         ]
         # A fixed-effect fit keeps the plotted range entirely above the null.

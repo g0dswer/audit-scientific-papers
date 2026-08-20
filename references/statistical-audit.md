@@ -258,10 +258,12 @@ odds, risk, or rate ratios, which are analysed on the log scale against a null o
 Passing a ratio measure to the linear path is an error, not a conservative
 approximation: it invents both a false p-value and a false asymmetry. If the interval is
 asymmetric **on the analysis scale**, retain separate lower- and upper-side widths and
-state the asymmetry; a ratio interval is expected to look asymmetric on the linear scale
-and symmetric after logging, and only log-scale asymmetry is a reportable signal. Always
-state the null value the reported p-value was tested against. Never present an
-approximate reconstruction as exact reanalysis or as an automated standardized-effect
+state the asymmetry, but quarantine the normal reconstruction and suppress its approximate
+p-value when the asymmetry is material. Do not average incompatible half-widths into one
+apparently precise standard error. A ratio interval is expected to look asymmetric on the
+linear scale and symmetric after logging, and only log-scale asymmetry is a reportable
+signal. Always state the null value the reported p-value was tested against. Never present
+an approximate reconstruction as exact reanalysis or as an automated standardized-effect
 verification.
 
 For change means, calculate the raw treatment change minus control change, then compare

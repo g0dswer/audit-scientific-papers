@@ -36,11 +36,17 @@ so under a fixed-effect request they return `NOT_ASSESSABLE` with a reason rathe
 publishing random-effects numbers under a fixed-effect heading. Every rung reports the
 model that produced it; never quote a rung without it.
 
+The ladder is cumulative where its labels imply cumulative cleaning. S6 through S8 start
+from S5's defensible-exposure subset; changing the variance estimator, inference method,
+or omitted cohort must not silently reintroduce assumption-dependent exposure rows.
+
 ## Heterogeneity and prediction
 
 Report Cochran's Q, between-study variance (`tau²`), and the proportion of observed
-variation attributed to heterogeneity (`I²`) with caveats. Numerical thresholds for `I²`
-are not a substitute for clinical and methodological assessment.
+variation attributed to heterogeneity (`I²`) with caveats. The engine reports
+`I2_method` explicitly because its Q-based I² is not estimator-specific even when DL, PM,
+and REML produce different tau² values. Numerical thresholds for `I²` are not a substitute
+for clinical and methodological assessment.
 
 For a random-effects synthesis with enough independent studies, calculate a prediction
 interval on the analysis scale and document the degrees-of-freedom convention. A prediction
@@ -49,32 +55,31 @@ it does not fix incompatible estimands and can be unstable when studies are few.
 
 ### Degrees-of-freedom convention
 
-The script builds the prediction interval as
-`pooled ± t(df) * sqrt(SE_conventional² + tau²)` on the analysis scale, and states the
-convention it used in every output (`prediction_df_convention` and
-`prediction_interval_df`).
+The script builds the prediction interval on the analysis scale from
+`sqrt(SE_conventional² + tau²)`. It states the degrees-of-freedom convention, multiplier
+distribution, and named method in `prediction_df_convention`, `prediction_interval_df`,
+`prediction_multiplier_distribution`, and `prediction_interval_method`.
 
 | Convention | df | Source | Flag |
 | --- | --- | --- | --- |
-| Cochrane / Higgins–Thompson–Spiegelhalter | `k - 2` | Cochrane Handbook 10.10.4.3; Higgins, Thompson & Spiegelhalter (2009); IntHout et al. (2016) | `--prediction-df k-2` (default) |
-| Model degrees of freedom | `k - 1` | Some software reports `k - p` for an intercept-only model | `--prediction-df k-1` |
+| Current Cochrane / Review Manager | Wald: normal multiplier; HKSJ: `t(k - 1)` | Cochrane Handbook 10.10.4.3 and current Review Manager implementation notes | `--prediction-df k-1` (default) |
+| Historical Higgins–Thompson–Spiegelhalter | `t(k - 2)` | Higgins, Thompson & Spiegelhalter (2009); IntHout et al. (2016) | `--prediction-df k-2` |
 
-The default is `k - 2`, because it is the convention the Cochrane Handbook specifies and
-this skill audits reviews against Cochrane conventions. The `k - 1` interval is narrower;
-on a 13-study pool the difference is roughly one percent of interval width, but it grows
-quickly as `k` falls. Under `k - 2` a two-study pool has zero degrees of freedom, so no
-prediction interval is produced and the output says why. When you report a published
-review's prediction interval, state which convention the authors used — if they do not
-say, treat the interval as unverifiable rather than assuming it matches yours.
+The default is the current Cochrane/Review Manager behavior. The historical `k - 2`
+option remains available only for explicit reproduction; with two studies it has zero
+degrees of freedom, so no prediction interval is produced and the output says why. When
+you report a published review's prediction interval, state which convention and inference
+method the authors used — if they do not say, treat the interval as unverifiable rather
+than assuming it matches yours.
 
-### Prediction intervals do not depend on the confidence-interval method
+### Prediction intervals and the confidence-interval method
 
-The prediction interval is always built from the **conventional** inverse-variance standard
-error, even when `--inference HKSJ` is selected for the confidence interval. A prediction
-interval describes the modeled distribution of true effects; it is not a property of how
-you chose to construct the interval around the mean. Reporting an HKSJ-inflated prediction
-interval alongside an HKSJ confidence interval double-counts the same small-sample
-adjustment.
+The prediction standard error always uses the **conventional** inverse-variance standard
+error, even when `--inference HKSJ` is selected for the confidence interval. The multiplier
+does follow the selected current method: Wald uses the normal quantile, while HKSJ uses
+Student's t with `k - 1` degrees of freedom. This matches the current Cochrane/Review
+Manager distinction without substituting the HKSJ confidence-interval standard error into
+the prediction standard error.
 
 Compare conventional normal/Wald inference with unmodified
 Hartung–Knapp–Sidik–Jonkman inference when appropriate. If its scale factor is below one,

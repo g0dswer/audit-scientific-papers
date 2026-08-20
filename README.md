@@ -192,6 +192,11 @@ python3 scripts/reconstruct_meta_analysis.py meta_data.csv \
   --analysis-id primary_pool \
   --tau2 DL \
   --expected-pooled 0.94 \
+  --expected-ci-lower 0.88 \
+  --expected-ci-upper 1.01 \
+  --expected-k 13 \
+  --expected-model random \
+  --expected-scale ratio \
   --json
 
 # Run the provenance and model sensitivity ladder
@@ -200,6 +205,12 @@ python3 scripts/reconstruct_meta_analysis.py meta_data.csv \
   --common-measure HR \
   --sensitivity all \
   --allow-mixed-estimands \
+  --expected-pooled 0.94 \
+  --expected-ci-lower 0.88 \
+  --expected-ci-upper 1.01 \
+  --expected-k 13 \
+  --expected-model random \
+  --expected-scale ratio \
   --json
 
 # Draw a forest plot of the reconstruction (dependency-free SVG)
@@ -224,14 +235,22 @@ ratio measures and the first step must reproduce that choice. It does not make t
 estimand scientifically valid. The source intervals are assumed to be 95% intervals by
 default; use `--input-confidence`, or a per-row `input_confidence` column when a forest
 plot mixes levels. `--confidence` controls the requested output interval without changing
-the reconstructed study variances.
+the reconstructed study variances. Both confidence levels must be finite and strictly
+between zero and one.
+
+A published-reproduction gate is complete only when the expected point estimate, both
+confidence bounds, study count, model, and scale are supplied. Missing fields yield
+`NOT_CHECKED`, not success; any mismatch yields `FAIL`. Numerical checks use both absolute
+and relative tolerances, and ratio results are compared on the log scale. Sensitivity
+results remain blocked until the gate passes.
 
 ### Statistical conventions
 
-- **Prediction intervals** use Student's t on **k − 2** degrees of freedom, the Cochrane
-  Handbook and Higgins–Thompson–Spiegelhalter convention. Pass `--prediction-df k-1` for
-  the model-degrees-of-freedom alternative that some software reports. Every output states
-  which convention it used.
+- **Prediction intervals** default to the current Cochrane/Review Manager convention:
+  Wald inference uses a normal multiplier, while HKSJ uses Student's t on **k − 1**
+  degrees of freedom. Pass `--prediction-df k-2` only to reproduce the historical
+  Higgins–Thompson–Spiegelhalter convention. Every output states its convention,
+  multiplier distribution, and method.
 - **Prediction intervals always use the conventional inverse-variance standard error**,
   even under `--inference HKSJ`, so choosing HKSJ for the confidence interval does not
   silently widen the prediction interval.
@@ -248,11 +267,20 @@ the reconstructed study variances.
   is retyped. A heuristic also warns when an input looks like an unlogged ratio, but it is
   a second net: it cannot detect a ratio close to the null with a narrow interval, which is
   exactly the shape of the largest cohort studies.
+- **Materially asymmetric source intervals are quarantined on the analysis scale.** The
+  continuous checker preserves the separate half-width diagnostics but suppresses the
+  reconstructed p-value; the meta-analysis engine rejects such a row instead of inventing
+  one standard error from incompatible sides.
 - **Event direction is explicit.** `calculate_binary_effects.py` takes `--harm` or
   `--benefit`; if neither is given it assumes a beneficial event and says so prominently,
   because the assumption inverts NNT and NNH labels.
-- **Dependence guards fail closed.** An unrecognized `overlap_status` is a blocking error,
-  not a value that quietly bypasses the overlap check.
+- **Dependence guards fail closed.** An unrecognized or contradictory overlap state is a
+  blocking error. Rows marked `modeled` are not accepted by this conventional
+  inverse-variance engine: use a genuinely dependence-aware analysis rather than an
+  override that only acknowledges unresolved dependence.
+- **Dataset inventory and pooling validity are separate.** Errors in deliberately excluded
+  provenance rows remain visible under inventory integrity, but do not invalidate an
+  otherwise valid included pool.
 
 The repository includes a versioned Naghshi 2020 fixture as a regression test. It checks
 published reconstruction and cleaner provenance/common-measure scenarios without changing

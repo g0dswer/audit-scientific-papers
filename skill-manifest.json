@@ -3,14 +3,17 @@
   "skill": "audit-scientific-papers",
   "repository": "g0dswer/audit-scientific-papers",
   "channel": "stable",
-  "version": "1.0.1",
-  "tag": "v1.0.1",
+  "version": "2.0.0",
+  "tag": "v2.0.0",
   "minimum_updater_protocol": 1,
   "published_at": "2026-08-20",
-  "summary": "Improve verified TLS compatibility for Python installations without configured default CA paths.",
+  "summary": "Harden statistical reconstruction, validation, sensitivity analysis, and reporting against all audited failure modes.",
   "changes": [
-    "Retry GitHub HTTPS requests with a verified certifi or operating-system CA bundle only when the default Python trust path fails.",
-    "Reuse the same verified TLS fallback for exact-commit archive downloads.",
-    "Never disable certificate verification or accept an untrusted TLS connection."
+    "Quarantine materially asymmetric confidence intervals and suppress unsupported reconstructed p-values while retaining explicit diagnostics.",
+    "Require a complete published-result reproduction gate before sensitivity analyses and enforce canonical dependence states inside the synthesis engine.",
+    "Use current Cochrane and Review Manager prediction-interval behavior by default while retaining the historical k-2 convention as an explicit option.",
+    "Keep cumulative sensitivity populations stable, separate inventory integrity from included-pool validity, validate output confidence, and label the Q-based I-squared method.",
+    "Correct exact NNT and NNH rounding, forest-plot weights and row alignment, very small p-values, and source-interval documentation.",
+    "Treat only a missing top-level SciPy package as optional absence; propagate broken internal SciPy imports and calculation failures."
   ]
 }

@@ -48,6 +48,15 @@ def _critical_value(confidence: float) -> float:
 _LINEAR_ASYMMETRY_TRIGGER = 0.05
 _LOG_SYMMETRY_FRACTION = 0.25
 
+# A normal/Wald standard error cannot be recovered defensibly from an interval
+# whose two analysis-scale half-widths differ materially.  A ten-percent
+# relative difference is deliberately permissive for published rounding while
+# quarantining the much larger asymmetry that can make the reconstructed p
+# contradict the reported interval.  This is a relative difference, not the
+# old upper/lower ratio, so it is bounded in [0, 1] and is interpretable for
+# either the identity or log analysis scale.
+CI_ASYMMETRY_RELATIVE_TOLERANCE = 0.10
+
 
 # Mirrors the effect-measure vocabulary of reconstruct_meta_analysis.py; a test
 # asserts the two stay identical. Kept local so the estimate/interval paths stay
@@ -140,6 +149,19 @@ def _ratio_scale_warning(
     )
 
 
+def _two_sided_normal_p(z_statistic: float) -> float:
+    """Return a stable two-sided standard-normal tail probability.
+
+    ``NormalDist.cdf`` used to underflow to exactly zero for moderately large
+    z statistics on some supported Python versions.  ``erfc`` evaluates the
+    survival tail directly, so the result remains useful for values such as
+    z=8.5 (approximately 1.9e-17) and does not depend on that implementation
+    detail of ``statistics.NormalDist``.
+    """
+
+    return math.erfc(abs(z_statistic) / math.sqrt(2.0))
+
+
 def reconstruct_from_ci(
     estimate: float,
     lower: float,
@@ -179,7 +201,12 @@ def reconstruct_from_ci(
     scale replaces a silent default with a decision the caller has to make.
 
     This deliberately uses a normal approximation and does not infer degrees
-    of freedom or claim exact reproduction of the published model.
+    of freedom or claim exact reproduction of the published model. If the
+    confidence interval is materially asymmetric on the selected analysis
+    scale, the reconstructed z and p are retained only as diagnostic arithmetic
+    and the p-value is suppressed (quarantined) by default. The named
+    ``CI_ASYMMETRY_RELATIVE_TOLERANCE`` allows only small asymmetry consistent
+    with published rounding.
     """
 
     estimate = _validate_real(estimate, "estimate")
@@ -222,13 +249,48 @@ def reconstruct_from_ci(
         raise ValueError("confidence interval must have positive average width")
 
     z_statistic = (analysis_estimate - analysis_null_value) / standard_error
-    p_two_sided = 2.0 * NormalDist().cdf(-abs(z_statistic))
     asymmetry = standard_error_upper - standard_error_lower
     asymmetry_ratio = (
         standard_error_upper / standard_error_lower
         if standard_error_lower > 0.0
         else None
     )
+    asymmetry_relative = abs(upper_half_width - lower_half_width) / (
+        upper_half_width + lower_half_width
+    )
+    asymmetry_material = (
+        asymmetry_relative > CI_ASYMMETRY_RELATIVE_TOLERANCE
+    )
+    asymmetry_status = "material" if asymmetry_material else "within_tolerance"
+    null_in_interval = analysis_lower <= analysis_null_value <= analysis_upper
+    diagnostic_scale = "linear" if scale == "linear" else "log"
+    if asymmetry_material:
+        p_two_sided = None
+        p_two_sided_status = "suppressed_material_asymmetry"
+        inferential_status = "quarantined"
+        asymmetry_diagnostic = (
+            "Material confidence-interval asymmetry on the "
+            f"{diagnostic_scale} analysis scale ({analysis_scale} coordinates): "
+            "relative half-width difference "
+            f"{asymmetry_relative:.6g} exceeds the named tolerance "
+            f"{CI_ASYMMETRY_RELATIVE_TOLERANCE:.6g}. A single Wald standard "
+            "error cannot be recovered defensibly; the approximate z and "
+            "two-sided p are quarantined. Recover the source standard error, "
+            "variance, test statistic, or model output before making an "
+            "inferential claim."
+        )
+    else:
+        p_two_sided = _two_sided_normal_p(z_statistic)
+        p_two_sided_status = "available_approximation"
+        inferential_status = "approximate"
+        asymmetry_diagnostic = (
+            "Confidence-interval asymmetry on the "
+            f"{diagnostic_scale} analysis scale ({analysis_scale} coordinates) "
+            "is within the named rounding "
+            f"tolerance ({asymmetry_relative:.6g} <= "
+            f"{CI_ASYMMETRY_RELATIVE_TOLERANCE:.6g}); the p-value remains an "
+            "approximate plausibility check, not an exact reconstruction."
+        )
 
     if scale == "ratio":
         scale_warning = None
@@ -272,9 +334,16 @@ def reconstruct_from_ci(
         "standard_error_upper_approx": standard_error_upper,
         "asymmetry_approx": asymmetry,
         "asymmetry_ratio_approx": asymmetry_ratio,
+        "asymmetry_relative_approx": asymmetry_relative,
+        "asymmetry_tolerance": CI_ASYMMETRY_RELATIVE_TOLERANCE,
+        "asymmetry_status": asymmetry_status,
+        "asymmetry_diagnostic": asymmetry_diagnostic,
+        "null_in_interval": null_in_interval,
         "z_statistic_approx": z_statistic,
         "absolute_z_statistic_approx": abs(z_statistic),
         "p_two_sided_approx": p_two_sided,
+        "p_two_sided_status": p_two_sided_status,
+        "inferential_status": inferential_status,
         "scale_warning": scale_warning,
         "approximate": True,
         "approximation_label": "approximate",
@@ -713,8 +782,22 @@ def _print_ci(result: dict[str, Any]) -> None:
         f"Approximate {label}asymmetry (upper - lower SE): "
         f"{result['asymmetry_approx']:.6g}"
     )
+    print(
+        "Relative analysis-scale asymmetry: "
+        f"{result['asymmetry_relative_approx']:.6g} "
+        f"(status: {result['asymmetry_status']}; tolerance: "
+        f"{result['asymmetry_tolerance']:.6g})"
+    )
     print(f"Approximate normal statistic: {result['z_statistic_approx']:.6g}")
-    print(f"Approximate two-sided p: {result['p_two_sided_approx']:.6g}")
+    if result["p_two_sided_approx"] is None:
+        print(
+            "Approximate two-sided p: SUPPRESSED "
+            f"({result['p_two_sided_status']})"
+        )
+    else:
+        print(f"Approximate two-sided p: {result['p_two_sided_approx']:.6g}")
+    print("Inference status: " + result["inferential_status"])
+    print("Asymmetry diagnostic: " + result["asymmetry_diagnostic"])
     if result["back_transformed"] is not None:
         back = result["back_transformed"]
         print(

@@ -11,13 +11,99 @@ from pathlib import Path
 from typing import Sequence
 
 from reconstruct_meta_analysis import (
+    CURRENT_PREDICTION_DF,
     PREDICTION_DF_CONVENTIONS,
     MetaAnalysisError,
     MetaRecord,
     filter_records,
     load_records,
     meta_analysis,
+    record_row_key,
 )
+
+
+def _row_key(record: MetaRecord) -> object:
+    """Return the stable key emitted with a fitted study weight.
+
+    A forest plot is only valid when the rows and weights came from the same
+    fitted dataset in the same order.  ``study_id`` is intentionally not a
+    fallback: it is not unique for legitimate strata and cannot detect a
+    changed row with the same label.
+    """
+
+    key = getattr(record, "row_key", None)
+    if key is None:
+        # MetaRecord remains a source-row dataclass; the fitted result carries
+        # the stable key computed by the meta engine's shared helper.  A local
+        # attribute is accepted for callers that materialize that contract on
+        # records themselves, while the helper keeps normal loaded records
+        # aligned with study_weights_percent.
+        try:
+            key = record_row_key(record)
+        except (TypeError, ValueError, KeyError) as exc:
+            raise MetaAnalysisError(
+                "Cannot verify forest rows: no stable row_key is available"
+            ) from exc
+    if key is None or (isinstance(key, str) and not key.strip()):
+        raise MetaAnalysisError(
+            "Cannot verify forest rows: MetaRecord.row_key is missing; rerun meta_analysis "
+            "with row-key support"
+        )
+    try:
+        hash(key)
+    except TypeError as exc:
+        raise MetaAnalysisError("Cannot verify forest rows: row_key must be hashable") from exc
+    return key
+
+
+def _aligned_weights(records: Sequence[MetaRecord], result: dict) -> list[float]:
+    """Validate row identity/order and return the corresponding fitted weights."""
+
+    entries = result.get("study_weights_percent")
+    if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
+        raise MetaAnalysisError(
+            "The fitted result has no study_weights_percent row-key contract; refusing to plot"
+        )
+    if len(entries) != len(records):
+        raise MetaAnalysisError(
+            "The plotted rows and the fitted study weights are not aligned; plot the same "
+            "records that were passed to meta_analysis"
+        )
+
+    record_keys = [_row_key(record) for record in records]
+    weight_keys: list[object] = []
+    weights: list[float] = []
+    for entry in entries:
+        if not isinstance(entry, dict) or "row_key" not in entry:
+            raise MetaAnalysisError(
+                "Cannot verify forest rows: every study weight must include row_key"
+            )
+        key = entry["row_key"]
+        if key is None or (isinstance(key, str) and not key.strip()):
+            raise MetaAnalysisError("Cannot verify forest rows: study weight row_key is empty")
+        try:
+            hash(key)
+        except TypeError as exc:
+            raise MetaAnalysisError("Cannot verify forest rows: row_key must be hashable") from exc
+        try:
+            weight = float(entry["weight"])
+        except (TypeError, ValueError) as exc:
+            raise MetaAnalysisError("Study weights must be finite non-negative numbers") from exc
+        if not math.isfinite(weight) or weight < 0.0:
+            raise MetaAnalysisError("Study weights must be finite non-negative numbers")
+        weight_keys.append(key)
+        weights.append(weight)
+
+    if len(set(record_keys)) != len(record_keys) or len(set(weight_keys)) != len(weight_keys):
+        raise MetaAnalysisError("Cannot verify forest rows: row_key values must be unique")
+    if record_keys != weight_keys:
+        raise MetaAnalysisError(
+            "The plotted dataset does not match the fitted study weights by row_key; "
+            "refusing to plot reordered or changed rows"
+        )
+    if not weights or max(weights) <= 0.0:
+        raise MetaAnalysisError("Study weights must contain at least one positive value")
+    return weights
 
 
 def write_forest_svg(
@@ -79,28 +165,24 @@ def write_forest_svg(
         lines.append(
             f'<line x1="{null_x:.2f}" y1="{header - 12}" x2="{null_x:.2f}" y2="{height - footer + 5}" stroke="#777" stroke-dasharray="4 4"/>'
         )
-    # Weights are matched to rows positionally: study_weights_percent is built by
-    # zipping over this same records sequence, and study_id is not unique within a
-    # pool (sex, arm, and timepoint strata legitimately repeat it).
-    weights = [item["weight"] for item in result["study_weights_percent"]]
-    if len(weights) != len(records):
-        raise MetaAnalysisError(
-            "The plotted rows and the fitted study weights are not aligned; plot the same "
-            "records that were passed to meta_analysis"
-        )
+    weights = _aligned_weights(records, result)
     largest_weight = max(weights)
     for index, record in enumerate(records):
         y = header + index * row_height
         low_x, high_x, point_x = x_position(record.lower), x_position(record.upper), x_position(record.effect)
         label = record.citation + (f" ({record.sex})" if record.sex and record.sex != "all" else "")
-        square_side = 4.0 + 10.0 * math.sqrt(weights[index] / largest_weight)
+        # Marker *area* is proportional to the fitted weight.  The side is
+        # therefore proportional to sqrt(weight), with no additive baseline.
+        # Keep enough decimal precision in the SVG attributes that serialization
+        # does not materially disturb the proportionality.
+        square_side = 14.0 * math.sqrt(weights[index] / largest_weight)
         lines.extend(
             [
                 f'<text x="24" y="{y + 5}" font-family="sans-serif" font-size="12">{html.escape(label)}</text>',
                 f'<line x1="{low_x:.2f}" y1="{y}" x2="{high_x:.2f}" y2="{y}" stroke="#222" stroke-width="1.5"/>',
                 f'<line x1="{low_x:.2f}" y1="{y - 4}" x2="{low_x:.2f}" y2="{y + 4}" stroke="#222"/>',
                 f'<line x1="{high_x:.2f}" y1="{y - 4}" x2="{high_x:.2f}" y2="{y + 4}" stroke="#222"/>',
-                f'<rect x="{point_x - square_side / 2:.2f}" y="{y - square_side / 2:.2f}" width="{square_side:.2f}" height="{square_side:.2f}" fill="#2457a7"/>',
+                f'<rect x="{point_x - square_side / 2:.10f}" y="{y - square_side / 2:.10f}" width="{square_side:.10f}" height="{square_side:.10f}" fill="#2457a7"/>',
                 f'<text x="{right + 20}" y="{y + 5}" font-family="monospace" font-size="12">{record.effect:.3f} ({record.lower:.3f}, {record.upper:.3f})</text>',
             ]
         )
@@ -128,11 +210,14 @@ def write_forest_svg(
                 f'<text x="{tick_x:.2f}" y="{axis_y + 21}" text-anchor="middle" font-family="sans-serif" font-size="10">{tick_value:.3g}</text>',
             ]
         )
-    prediction_text = (
-        f"; prediction interval {result['prediction_lower']:.3f} to {result['prediction_upper']:.3f}"
-        if result["prediction_lower"] is not None
-        else "; prediction interval not applicable to fixed-effect model"
-    )
+    if result["prediction_lower"] is not None:
+        prediction_text = (
+            f"; prediction interval {result['prediction_lower']:.3f} to "
+            f"{result['prediction_upper']:.3f}"
+        )
+    else:
+        prediction_reason = result.get("prediction_not_estimable_reason") or "not estimable"
+        prediction_text = f"; prediction interval not estimable: {html.escape(str(prediction_reason))}"
     lines.append(
         f'<text x="24" y="{height - footer + 65}" font-family="sans-serif" font-size="11">Q={result["Q"]:.3f}; tau²={result["tau2"]:.5f}; I²={result["I2_percent"]:.1f}%{prediction_text}</text>'
     )
@@ -156,7 +241,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--common-measure")
     parser.add_argument("--model", choices=("fixed", "random"), default="random")
     parser.add_argument("--input-confidence", type=float, default=0.95)
-    parser.add_argument("--prediction-df", choices=PREDICTION_DF_CONVENTIONS, default="k-2")
+    parser.add_argument(
+        "--prediction-df",
+        choices=PREDICTION_DF_CONVENTIONS,
+        default=CURRENT_PREDICTION_DF,
+    )
     parser.add_argument("--allow-mixed-estimands", action="store_true")
     parser.add_argument("--allow-dependence", action="store_true")
     parser.add_argument("--title", default="Meta-analysis reconstruction")

@@ -36,9 +36,11 @@ source_url,participant_overlap_possible,overlap_status,include_published,notes
 confidence level of that row's printed interval as a decimal (`0.95`, `0.90`). Leave it
 blank to inherit the global `--input-confidence`, which itself defaults to 0.95. Set it
 whenever a forest plot mixes interval levels: the standard error is inverted from the
-printed bounds, so applying 1.96 to a printed 90% interval inflates that row's variance by
-roughly forty percent and silently misweights it. Every output lists the levels it
-actually used in `input_confidence_levels`; check that list against the source figure.
+printed bounds, so using 1.96 for a printed 90% interval instead of its 90% critical value
+makes the reconstructed standard error 16.1% too low, the variance 29.6% too low, and the
+inverse-variance weight 42% too high. This silently misweights the row. Every output lists
+the levels it actually used in `input_confidence_levels`; check that list against the source
+figure.
 
 Add other review-specific fields when material: follow-up, events, sample size, dose
 contrast, reference category, adjusted_age, adjusted_sex, adjusted_smoking, adjusted_bmi,
@@ -115,6 +117,13 @@ formatting preference.
 `none` is an assertion that you looked and found no plausible overlap. If you have not
 looked, the honest value is `unknown` or `possible`, both of which block default pooling
 when `participant_overlap_possible` is true.
+
+`overlap_status` is the canonical state; the Boolean is retained for compatibility and
+must agree with it. Thus `none` requires `participant_overlap_possible=false`, unresolved
+states require `true`, and a row marked `resolved_duplicate_removed` cannot remain included.
+The aggregate engine also rejects `modeled`: that state describes work done in a separate
+covariance- or multilevel-aware analysis whose uncertainty cannot be reconstructed by this
+univariate inverse-variance engine.
 
 Multiple rows from one cohort may be valid strata, but they are not automatically
 independent. Leave-one-out diagnostics should delete the cohort cluster, not just one row.
