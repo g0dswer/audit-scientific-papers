@@ -72,6 +72,10 @@ coefficient for their total without their joint model and covariance.
 ## Effect and interval checks
 
 Record the effect measure exactly as reported: `HR`, `RR`, `OR`, `IRR`, `MD`, or `SMD`.
+This column is load-bearing beyond the pooling engine: the single-study checker takes the
+same vocabulary through `verify_continuous_result.py ci ... --measure`, and derives the
+analysis scale from it. A wrong `measure` therefore corrupts both the pool and every
+single-study reconstruction built from that row.
 For a ratio estimate with a printed two-sided 95% interval, the scripts reconstruct:
 
 ```text

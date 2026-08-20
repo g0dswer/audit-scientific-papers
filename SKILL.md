@@ -101,24 +101,29 @@ Do not convert a standardized continuous effect into a number needed to treat un
 For a published continuous estimate and confidence interval, run:
 
 ```bash
-python3 scripts/verify_continuous_result.py ci ESTIMATE LOWER UPPER --scale linear --json
+python3 scripts/verify_continuous_result.py ci ESTIMATE LOWER UPPER --measure MD --json
+python3 scripts/verify_continuous_result.py ci ESTIMATE LOWER UPPER --measure HR --json
 ```
 
-**`--scale` is required and has no default; the command fails rather than guess.**
-`--scale linear` tests the estimate against a null of zero and is correct for mean
-differences and other additive contrasts. A ratio measure — hazard ratio, odds ratio, risk
-ratio, incidence-rate ratio — has a null of one and must be analyzed on the log scale:
+**Name the effect measure. Exactly one of `--measure` or `--scale` is required and
+neither has a default; the command fails rather than guess.** Prefer `--measure`, which
+takes the measure as the source reports it — `HR`, `RR`, `OR`, `IRR`, `RATIO`, `MD`,
+`SMD` — the same vocabulary the extraction schema audits row by row, and derives the
+analysis scale from it. Reach for `--scale linear` or `--scale ratio` only for a measure
+outside that list.
 
-```bash
-python3 scripts/verify_continuous_result.py ci RATIO LOWER UPPER --scale ratio --json
-```
+The distinction is not cosmetic. A difference measure is tested against a null of zero on
+the reported scale. A ratio measure has a null of one and must be analyzed on the log
+scale; sending it down the linear path produces a badly wrong p-value and a spurious
+interval asymmetry — two fabricated findings of exactly the kind this audit exists to
+catch.
 
-Passing a ratio to the linear path produces a badly wrong p-value and a spurious interval
-asymmetry. Identify the effect measure from the source before running the command. The
-tool also warns when an input has the signature of an unlogged ratio, but that warning is
-a second net only: it cannot fire on a ratio close to the null with a narrow interval, such
-as HR 0.98 (0.94 to 1.02), where the linear path still returns a z of 48 against a true
-value near −1.
+The tool also warns when an input has the signature of an unlogged ratio, and that guard
+stays active on the linear path even when a measure was named, so a mislabeled `MD` row is
+still flagged. Treat it as a second net only: it cannot fire on a ratio close to the null
+with a narrow interval, such as HR 0.98 (0.94 to 1.02), where the linear path still returns
+a z of 48 against a true value near −1. Identify the measure from the source; do not wait
+for the warning.
 
 For group baseline and endpoint means, run:
 

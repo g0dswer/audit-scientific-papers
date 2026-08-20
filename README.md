@@ -131,8 +131,8 @@ python3 scripts/plot_forest.py meta_data.csv forest.svg \
 python3 scripts/calculate_binary_effects.py 16 41 12 39 --harm --json
 
 # Consistency checks on a published estimate and interval
-python3 scripts/verify_continuous_result.py ci -4.04 -6.89 -1.18 --scale linear --json
-python3 scripts/verify_continuous_result.py ci 0.75 0.60 0.94 --scale ratio --json
+python3 scripts/verify_continuous_result.py ci -4.04 -6.89 -1.18 --measure MD --json
+python3 scripts/verify_continuous_result.py ci 0.75 0.60 0.94 --measure HR --json
 ```
 
 Use `--allow-mixed-estimands` only when the published forest plot itself mixed native
@@ -154,12 +154,14 @@ the reconstructed study variances.
 - **`--model fixed` is honoured across the whole sensitivity ladder.** Rungs that are
   meaningful only for random effects report `NOT_ASSESSABLE` rather than publishing
   random-effects numbers under a fixed-effect heading.
-- **Ratio measures must be analyzed on the log scale.** `--scale {linear,ratio}` is a
-  required argument on the continuous checker, with no default, because a hazard, odds, or
-  risk ratio sent down the linear path gets a badly wrong p-value and a spurious interval
-  asymmetry. A heuristic also warns when an input looks like an unlogged ratio, but it is a
-  second net: it cannot detect a ratio close to the null with a narrow interval, which is
-  exactly the shape of the largest cohort studies.
+- **Ratio measures must be analyzed on the log scale.** The continuous checker requires
+  exactly one of `--measure {HR,RR,OR,IRR,RATIO,MD,SMD}` or `--scale {linear,ratio}`, with
+  no default, because a hazard, odds, or risk ratio sent down the linear path gets a badly
+  wrong p-value and a spurious interval asymmetry. Prefer `--measure`: it is the vocabulary
+  the source and the extraction schema already use, so the scale follows from an audited
+  field instead of a judgement call. A heuristic also warns when an input looks like an
+  unlogged ratio, but it is a second net: it cannot detect a ratio close to the null with a
+  narrow interval, which is exactly the shape of the largest cohort studies.
 - **Event direction is explicit.** `calculate_binary_effects.py` takes `--harm` or
   `--benefit`; if neither is given it assumes a beneficial event and says so prominently,
   because the assumption inverts NNT and NNH labels.

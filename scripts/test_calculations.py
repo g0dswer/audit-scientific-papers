@@ -26,6 +26,7 @@ from calculate_binary_effects import (  # noqa: E402
     newcombe_difference_interval,
     wilson_interval,
 )
+import verify_continuous_result as vcr  # noqa: E402
 from verify_continuous_result import (  # noqa: E402
     check_change_means,
     check_standardized_effect,
@@ -554,10 +555,11 @@ class ContinuousResultTests(unittest.TestCase):
             text=True,
         )
         self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("--measure", missing.stderr)
         self.assertIn("--scale", missing.stderr)
 
-        with self.assertRaises(TypeError):
-            reconstruct_from_ci(0.98, 0.94, 1.02)  # type: ignore[call-arg]
+        with self.assertRaisesRegex(ValueError, "exactly one of scale"):
+            reconstruct_from_ci(0.98, 0.94, 1.02)
 
         # The undetectable case: no warning is possible, and the two scales
         # disagree by roughly fifty standard errors.
@@ -567,6 +569,70 @@ class ContinuousResultTests(unittest.TestCase):
         self.assertGreater(linear["absolute_z_statistic_approx"], 40.0)
         self.assertLess(ratio["absolute_z_statistic_approx"], 1.5)
         self.assertAlmostEqual(ratio["p_two_sided_approx"], 0.332, delta=0.01)
+
+    def test_measure_vocabulary_matches_the_meta_analysis_engine(self):
+        # The calculator keeps its own copy so it stays standalone, but a row
+        # extracted for the meta engine must be accepted here unchanged.
+        import reconstruct_meta_analysis as engine
+
+        self.assertEqual(vcr.RATIO_MEASURES, engine.RATIO_MEASURES)
+        self.assertEqual(vcr.LINEAR_MEASURES, engine.LINEAR_MEASURES)
+        self.assertFalse(vcr.RATIO_MEASURES & vcr.LINEAR_MEASURES)
+
+    def test_measure_derives_the_scale_and_is_reported_back(self):
+        for measure in sorted(vcr.RATIO_MEASURES):
+            with self.subTest(measure=measure):
+                result = reconstruct_from_ci(0.75, 0.60, 0.94, measure=measure)
+                self.assertEqual(result["scale"], "ratio")
+                self.assertEqual(result["measure"], measure)
+                self.assertEqual(result["scale_source"], "measure")
+                self.assertEqual(result["null_value"], 1.0)
+                self.assertAlmostEqual(result["p_two_sided_approx"], 0.0120102, delta=1e-6)
+
+        for measure in sorted(vcr.LINEAR_MEASURES):
+            with self.subTest(measure=measure):
+                result = reconstruct_from_ci(-4.04, -6.89, -1.18, measure=measure)
+                self.assertEqual(result["scale"], "linear")
+                self.assertEqual(result["measure"], measure)
+                self.assertEqual(result["null_value"], 0.0)
+
+        # Lower case and stray whitespace are normalised, not rejected.
+        self.assertEqual(
+            reconstruct_from_ci(0.75, 0.60, 0.94, measure=" hr ")["measure"], "HR"
+        )
+        # Naming the scale directly leaves measure unset.
+        direct = reconstruct_from_ci(0.75, 0.60, 0.94, scale="ratio")
+        self.assertIsNone(direct["measure"])
+        self.assertEqual(direct["scale_source"], "scale")
+
+    def test_measure_and_scale_are_mutually_exclusive_and_measure_is_validated(self):
+        with self.assertRaisesRegex(ValueError, "exactly one of scale"):
+            reconstruct_from_ci(0.75, 0.60, 0.94, scale="ratio", measure="HR")
+        with self.assertRaisesRegex(ValueError, "unknown effect measure"):
+            reconstruct_from_ci(0.75, 0.60, 0.94, measure="RD")
+        with self.assertRaisesRegex(ValueError, "measure HR requires strictly positive"):
+            reconstruct_from_ci(-1.0, -2.0, -0.5, measure="HR")
+
+        both = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "verify_continuous_result.py"),
+                "ci", "0.75", "0.60", "0.94", "--measure", "HR", "--scale", "ratio",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(both.returncode, 0)
+        self.assertIn("not allowed with argument", both.stderr)
+
+    def test_measure_path_still_runs_the_ratio_guard_on_a_mislabeled_linear_measure(self):
+        # A row labelled MD whose interval has the signature of an unlogged
+        # ratio must still be flagged: the measure column can itself be wrong.
+        result = reconstruct_from_ci(0.75, 0.60, 0.94, measure="MD")
+        self.assertEqual(result["scale"], "linear")
+        self.assertIsNotNone(result["scale_warning"])
+        self.assertIn("--scale ratio", result["scale_warning"])
 
     def test_ratio_cli_reports_both_scales_and_json_carries_the_warning(self):
         ratio_text = subprocess.run(
@@ -584,7 +650,7 @@ class ContinuousResultTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        self.assertIn("Scale: ratio (analysis scale: log)", ratio_text.stdout)
+        self.assertIn("Scale: ratio (given directly; analysis scale: log)", ratio_text.stdout)
         self.assertIn("Null value: 1", ratio_text.stdout)
         self.assertIn("Log-scale estimate:", ratio_text.stdout)
         self.assertIn("Approximate log-scale SE: 0.11453", ratio_text.stdout)

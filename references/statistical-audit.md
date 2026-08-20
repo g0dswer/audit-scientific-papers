@@ -140,13 +140,28 @@ time-to-event models, or other prespecified analyses.
 The continuous checker can be used as follows:
 
 ```bash
+python3 scripts/verify_continuous_result.py ci ESTIMATE LOWER UPPER --measure MD --json
+python3 scripts/verify_continuous_result.py ci RATIO LOWER UPPER --measure HR --json
 python3 scripts/verify_continuous_result.py ci ESTIMATE LOWER UPPER --scale linear --json
-python3 scripts/verify_continuous_result.py ci RATIO LOWER UPPER --scale ratio --json
 python3 scripts/verify_continuous_result.py changes BT ET BC EC --adjusted-estimate VALUE --json
 python3 scripts/verify_continuous_result.py standardized MEAN_DIFFERENCE DENOMINATOR_SD N_TREATMENT N_CONTROL --degrees-of-freedom DF --reported-effect VALUE --reported-metric hedges_g --tolerance 0.1 --json
 ```
 
-`--scale` is a **required** argument with no default: the command fails rather than guess.
+Exactly one of `--measure` or `--scale` is **required**, with no default on either: the
+command fails rather than guess.
+
+`--measure` is the preferred form. It takes the effect measure exactly as the source
+reports it — `HR`, `RR`, `OR`, `IRR`, `RATIO`, `MD`, `SMD` — and derives the analysis
+scale from it. This is the same vocabulary `meta-analysis-extraction.md` requires in the
+`measure` column, so the scale follows from a field that is already traced to the original
+report and verified row by row, rather than from a separate judgement the auditor has to
+make correctly a second time. The chosen measure is echoed back in the output as `measure`,
+with `scale_source` recording whether the scale came from a measure or was named directly.
+The two vocabularies are pinned to each other by a test.
+
+`--scale linear` and `--scale ratio` name the analysis scale directly and exist for a
+measure outside that list.
+
 The linear path is for difference measures (mean differences, risk differences) and tests
 the estimate against a null of **0** on the reported scale. Ratio measures — hazard ratios, odds ratios, risk
 ratios, rate ratios, and any other multiplicative estimate — must **never** be passed to
@@ -154,7 +169,7 @@ the linear path: their null is 1, not 0, and their intervals are symmetric only 
 logging. Sending a ratio through the linear path fabricates two false findings at once, a
 spuriously extreme p-value and a spurious interval asymmetry.
 
-With `--scale ratio` the estimate, lower, and upper bounds must all be strictly positive.
+On the ratio path the estimate, lower, and upper bounds must all be strictly positive.
 The tool then computes `SE(log ratio) = (log(upper) - log(lower)) / (2*z)`, tests
 `z = log(estimate) / SE` against a null of **1**, and reports asymmetry on the log scale.
 The output labels every quantity by scale: the log-scale intermediates
@@ -179,8 +194,13 @@ scales. Against the 38 ratio rows of the repository's own Naghshi 2020 fixture t
 misses six, including HR 0.98 (0.94 to 1.02) and HR 1.00 (0.98 to 1.02) — the shape of the
 largest and most heavily weighted cohort studies, and the rows whose weight most influences
 a pooled result. On HR 0.98 (0.94 to 1.02) the linear path reports `z = 48.02` where the
-truth is `z = -0.97`, with no warning available. That is why `--scale` is required rather
-than defaulted: identify the effect measure yourself, every time.
+truth is `z = -0.97`, with no warning available. That is why naming the measure or the
+scale is required rather than defaulted: identify the effect measure yourself, every time.
+
+The guard stays active on the linear path even when the scale came from `--measure`, so a
+row labelled `MD` whose interval carries the signature of an unlogged ratio is still
+flagged. The measure column can itself be wrong, and a warning there is a genuine
+extraction finding worth chasing back to the original report.
 
 Values reconstructed from an interval are approximate. Do not infer degrees of freedom,
 the exact model, or the published p-value from a confidence interval alone. Inspect

@@ -49,10 +49,42 @@ _LINEAR_ASYMMETRY_TRIGGER = 0.05
 _LOG_SYMMETRY_FRACTION = 0.25
 
 
+# Mirrors the effect-measure vocabulary of reconstruct_meta_analysis.py; a test
+# asserts the two stay identical. Kept local so this calculator remains a
+# standalone single-study tool with no runtime import of the meta engine.
+RATIO_MEASURES = {"HR", "RR", "OR", "IRR", "RATIO"}
+LINEAR_MEASURES = {"MD", "SMD"}
+
+
 def _validate_scale(scale: str) -> str:
     if scale not in ("linear", "ratio"):
         raise ValueError("scale must be 'linear' or 'ratio'")
     return scale
+
+
+def _resolve_scale(scale: str | None, measure: str | None) -> tuple[str, str | None]:
+    """Resolve the analysis scale from exactly one of ``scale`` or ``measure``.
+
+    Naming the measure is preferred: it is the vocabulary the source itself
+    uses and the extraction schema audits, so it leaves less room for the
+    caller to mis-abstract a hazard ratio into ``linear``.
+    """
+    if (scale is None) == (measure is None):
+        raise ValueError(
+            "exactly one of scale ('linear' or 'ratio') or measure "
+            "(HR, RR, OR, IRR, RATIO, MD, SMD) must be supplied"
+        )
+    if scale is not None:
+        return _validate_scale(scale), None
+    normalized = str(measure).strip().upper()
+    if normalized in RATIO_MEASURES:
+        return "ratio", normalized
+    if normalized in LINEAR_MEASURES:
+        return "linear", normalized
+    raise ValueError(
+        f"unknown effect measure {measure!r}; expected one of "
+        f"{', '.join(sorted(RATIO_MEASURES | LINEAR_MEASURES))}"
+    )
 
 
 def _ratio_scale_warning(
@@ -113,7 +145,8 @@ def reconstruct_from_ci(
     upper: float,
     confidence: float = 0.95,
     *,
-    scale: str,
+    scale: str | None = None,
+    measure: str | None = None,
 ) -> dict[str, Any]:
     """Reconstruct approximate SE, normal statistic, and two-sided p-value.
 
@@ -122,22 +155,27 @@ def reconstruct_from_ci(
 
         SE ~= ((estimate - lower) + (upper - estimate)) / (2 * z_critical)
 
-    ``scale`` is required and has no default.  With ``scale="linear"`` the
-    estimate is a difference measure and is tested against a null of 0 on the
-    reported scale.  With ``scale="ratio"`` the estimate is a ratio measure
-    (hazard ratio, odds ratio, risk ratio), all three values must be strictly
-    positive, the reconstruction is performed on the natural-log scale, and
-    the null value is 1.  Ratio measures must never be sent through the linear
-    path: their null is not 0 and their intervals are symmetric only after
-    logging.
+    Exactly one of ``scale`` or ``measure`` is required; neither has a
+    default.  ``measure`` is preferred: it takes the effect measure as the
+    source reports it (``HR``, ``RR``, ``OR``, ``IRR``, ``RATIO``, ``MD``,
+    ``SMD``), the same vocabulary the extraction schema already audits row by
+    row, and derives the scale from it.  ``scale`` takes the analysis scale
+    directly and is the escape hatch for a measure outside that vocabulary.
+
+    On the linear scale the estimate is a difference measure tested against a
+    null of 0 on the reported scale.  On the ratio scale the estimate is a
+    ratio measure, all three values must be strictly positive, the
+    reconstruction is performed on the natural-log scale, and the null value
+    is 1.  Ratio measures must never be sent through the linear path: their
+    null is not 0 and their intervals are symmetric only after logging.
 
     There is no default because the heuristic in ``_ratio_scale_warning``
     cannot catch every mislabeled ratio.  A ratio close to the null with a
     narrow interval -- HR 0.98 (0.94 to 1.02), the shape of the largest and
     most heavily weighted cohort studies -- is very nearly symmetric on both
     scales, so no warning can fire, yet the linear path reports z = 48 where
-    the truth is z = -0.97.  Forcing the caller to name the scale replaces a
-    silent default with a decision the caller has to make.
+    the truth is z = -0.97.  Forcing the caller to name the measure or the
+    scale replaces a silent default with a decision the caller has to make.
 
     This deliberately uses a normal approximation and does not infer degrees
     of freedom or claim exact reproduction of the published model.
@@ -147,14 +185,15 @@ def reconstruct_from_ci(
     lower = _validate_real(lower, "lower")
     upper = _validate_real(upper, "upper")
     confidence = _validate_confidence(confidence)
-    scale = _validate_scale(scale)
+    scale, measure = _resolve_scale(scale, measure)
     if not lower < upper:
         raise ValueError("lower must be strictly less than upper")
     if not lower <= estimate <= upper:
         raise ValueError("estimate must lie between lower and upper")
     if scale == "ratio" and not (estimate > 0.0 and lower > 0.0 and upper > 0.0):
+        source = f"measure {measure}" if measure else "ratio scale"
         raise ValueError(
-            "ratio scale requires strictly positive estimate, lower, and upper"
+            f"{source} requires strictly positive estimate, lower, and upper"
         )
 
     if scale == "ratio":
@@ -216,6 +255,8 @@ def reconstruct_from_ci(
         "upper": upper,
         "confidence": confidence,
         "scale": scale,
+        "measure": measure,
+        "scale_source": "measure" if measure else "scale",
         "analysis_scale": analysis_scale,
         "null_value": null_value,
         "analysis_estimate": analysis_estimate,
@@ -434,16 +475,24 @@ def _build_parser() -> argparse.ArgumentParser:
     ci_parser.add_argument("lower", type=float)
     ci_parser.add_argument("upper", type=float)
     ci_parser.add_argument("--confidence", type=float, default=0.95)
-    ci_parser.add_argument(
+    scale_group = ci_parser.add_mutually_exclusive_group(required=True)
+    scale_group.add_argument(
+        "--measure",
+        choices=tuple(sorted(RATIO_MEASURES | LINEAR_MEASURES)),
+        help=(
+            "the effect measure as the source reports it; the analysis scale "
+            "is derived from it. Preferred over --scale, because it is the "
+            "vocabulary the extraction schema already audits row by row"
+        ),
+    )
+    scale_group.add_argument(
         "--scale",
         choices=("linear", "ratio"),
-        required=True,
         help=(
-            "required: linear for difference measures tested against a null "
-            "of 0; ratio for hazard, odds, or risk ratios, which are analysed "
-            "on the log scale against a null of 1. There is deliberately no "
-            "default, because the wrong scale silently produces a wrong "
-            "p-value and a spurious interval asymmetry"
+            "the analysis scale directly, for a measure outside the --measure "
+            "vocabulary: linear for difference measures tested against a null "
+            "of 0; ratio for multiplicative measures, analysed on the log "
+            "scale against a null of 1"
         ),
     )
     ci_parser.add_argument("--json", action="store_true", help="emit JSON")
@@ -478,7 +527,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _print_ci(result: dict[str, Any]) -> None:
     print("Continuous result reconstruction: approximate")
-    print(f"Scale: {result['scale']} (analysis scale: {result['analysis_scale']})")
+    origin = (
+        f"from measure {result['measure']}"
+        if result["measure"]
+        else "given directly"
+    )
+    print(
+        f"Scale: {result['scale']} ({origin}; analysis scale: "
+        f"{result['analysis_scale']})"
+    )
     print(f"Null value: {result['null_value']:.6g}")
     print(f"Estimate: {result['estimate']:.6g}")
     if result["scale"] == "ratio":
@@ -563,6 +620,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.upper,
                 confidence=args.confidence,
                 scale=args.scale,
+                measure=args.measure,
             )
         else:
             if args.command == "changes":
