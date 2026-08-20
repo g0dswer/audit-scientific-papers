@@ -119,7 +119,25 @@ protocol for the following study:
 
 ## Use it in Claude(Cowork, Code or Science)
 
-If you're a Claude Code user click here on the repo in CODE(green) then Download ZIP.
+Paste this prompt:
+
+```text
+Install or import the Audit Scientific Papers skill from:
+https://github.com/g0dswer/audit-scientific-papers
+
+Read SKILL.md and every referenced file, preserve the repository structure, run all
+tests, and validate the skill.
+```
+Then:
+```text
+  /audit-scientific-papers 
+  
+  [PASTE THE LINK, DOI, OR ATTACH THE FILE]
+```
+
+OR
+
+Click here on the repo in CODE(green) then Download ZIP.
 
 Now in Claude Code click in Customize on the top left, go to Skills, click Add then Upload a skill.
 
