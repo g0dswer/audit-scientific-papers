@@ -736,6 +736,29 @@ class ContinuousResultTests(unittest.TestCase):
         self.assertIn("read from the dataset, not retyped", ok.stdout)
         self.assertIn("Null value: 1", ok.stdout)
 
+    def test_row_reports_filesystem_errors_as_clean_diagnostics(self):
+        # A missing or directory-valued path must not escape as a traceback:
+        # every other dataset entry point prints "error: ..." and exits.
+        with self.assertRaisesRegex(ValueError, "could not load"):
+            reconstruct_from_row("/nonexistent/dataset.csv", "X")
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "could not load"):
+                reconstruct_from_row(directory, "X")
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_DIR / "verify_continuous_result.py"),
+                    "row", str(Path(directory) / "missing.csv"), "X",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("error: could not load", completed.stderr)
+        self.assertNotIn("Traceback", completed.stderr)
+
     def test_ratio_cli_reports_both_scales_and_json_carries_the_warning(self):
         ratio_text = subprocess.run(
             [

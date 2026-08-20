@@ -19,6 +19,14 @@ from statistics import NormalDist, median
 from typing import Sequence
 
 
+# The Hartung-Knapp-Sidik-Jonkman scale factor q is exactly the squared ratio of
+# the HKSJ standard error to the conventional one: SE_HKSJ = sqrt(q) * SE_conv.
+# The floor below is therefore not an arbitrary tolerance -- it is the point at
+# which the HKSJ interval would be a millionth of the conventional width, which
+# only happens when the study estimates are identical up to rounding. Its
+# expected value under the model is 1, so the comparison is scale-free.
+_HKSJ_MINIMUM_SCALE_FACTOR = 1e-12
+
 RATIO_MEASURES = {"HR", "RR", "OR", "IRR", "RATIO"}
 LINEAR_MEASURES = {"MD", "SMD"}
 DIRECT_PROVENANCE = {"DIRECT", "DERIVED_VALID"}
@@ -543,11 +551,14 @@ def meta_analysis(
             weight * (value - pooled_linear) ** 2
             for weight, value in zip(weights, values)
         ) / degrees_of_freedom
-        if not math.isfinite(hksj_q) or hksj_q <= 1e-12:
+        if not math.isfinite(hksj_q) or hksj_q <= _HKSJ_MINIMUM_SCALE_FACTOR:
             raise MetaAnalysisError(
-                "The Hartung-Knapp-Sidik-Jonkman scale factor is zero or not finite because the study "
-                "estimates carry no residual dispersion; the interval is not estimable and a zero-width "
-                "interval will not be reported"
+                "The Hartung-Knapp-Sidik-Jonkman scale factor is "
+                f"{hksj_q:.3g}, so the interval would be at least "
+                f"{1.0 / math.sqrt(_HKSJ_MINIMUM_SCALE_FACTOR):.0f} times narrower than the "
+                "conventional interval: the study estimates carry no residual dispersion "
+                "distinguishable from rounding, the interval is not estimable, and a "
+                "collapsed interval will not be reported"
             )
         standard_error = math.sqrt(hksj_q / sum(weights))
         critical = _student_t_quantile(1.0 - (1.0 - confidence) / 2.0, degrees_of_freedom)

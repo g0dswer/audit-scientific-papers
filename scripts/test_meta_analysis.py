@@ -1,4 +1,5 @@
 import json
+import math
 import subprocess
 import sys
 import tempfile
@@ -353,6 +354,35 @@ class MetaAnalysisGuardrailTests(unittest.TestCase):
         self.assertAlmostEqual(meta_analysis(identical)["pooled"], 0.74, delta=1e-12)
         with self.assertRaisesRegex(MetaAnalysisError, "not estimable"):
             meta_analysis(identical, inference="HKSJ")
+
+    def test_hksj_floor_is_the_ratio_to_the_conventional_interval(self):
+        # The scale factor is exactly (SE_HKSJ / SE_conventional)**2, so the floor
+        # is a statement about interval collapse, not an arbitrary tolerance.
+        source = filter_records(self.records, analysis_id="total_all_cause", common_measure="HR")[:3]
+        base = source[0]
+        near_identical = [
+            base,
+            replace(source[1], effect=base.effect + 1e-8, lower=base.lower, upper=base.upper),
+            replace(source[2], effect=base.effect + 2e-8, lower=base.lower, upper=base.upper),
+        ]
+        with self.assertRaisesRegex(MetaAnalysisError, "times narrower than the conventional"):
+            meta_analysis(near_identical, inference="HKSJ")
+
+        # A pool with real dispersion is unaffected, and sqrt(q) is the ratio.
+        clean = filter_records(
+            self.records,
+            analysis_id="total_all_cause",
+            direct_outcomes_only=True,
+            common_measure="HR",
+        )
+        fitted = meta_analysis(clean, inference="HKSJ")
+        self.assertAlmostEqual(
+            fitted["standard_error_linear"],
+            math.sqrt(fitted["hksj_scale_q"]) * fitted["conventional_standard_error_linear"],
+            delta=1e-15,
+        )
+        self.assertAlmostEqual(fitted["ci_lower"], 0.8760814699052611, delta=1e-12)
+        self.assertAlmostEqual(fitted["ci_upper"], 1.0328780155611845, delta=1e-12)
 
     def test_ratio_and_linear_measures_report_the_actual_incompatibility(self):
         source = filter_records(self.records, analysis_id="total_all_cause", common_measure="HR")[:2]

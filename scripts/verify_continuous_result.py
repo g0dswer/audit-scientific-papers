@@ -319,9 +319,12 @@ def reconstruct_from_row(
     # Imported here so the estimate/interval paths stay dependency-free.
     from reconstruct_meta_analysis import MetaAnalysisError, load_records
 
+    # OSError covers a missing, unreadable, or directory-valued path; without it
+    # the CLI would print a traceback where every other dataset entry point
+    # prints a clean diagnostic.
     try:
         records = load_records(dataset)
-    except MetaAnalysisError as error:
+    except (MetaAnalysisError, OSError) as error:
         raise ValueError(f"could not load {dataset}: {error}") from error
 
     matches = [
@@ -365,7 +368,13 @@ def reconstruct_from_row(
         "citation": record.citation,
         "cohort_id": record.cohort_id,
         "measure": record.measure,
-        "sex": record.sex,
+        # CodeQL classifies a field named `sex` as private personal data. Here it
+        # is a published subgroup label -- "all", "men", "women" -- transcribed
+        # from a forest plot, identifying which stratum of a study a row came
+        # from. This tool reads aggregate published estimates only and never
+        # holds participant-level data, so there is no personal information to
+        # disclose. Reported because a stratum is part of a row's identity.
+        "sex": record.sex,  # codeql[py/clear-text-logging-sensitive-data]
         "outcome_reported_originally": record.outcome_reported_originally,
         "outcome_used_in_meta_analysis": record.outcome_used_in_meta_analysis,
         "outcome_provenance": record.outcome_provenance,
@@ -654,7 +663,10 @@ def _build_parser() -> argparse.ArgumentParser:
 def _print_row_header(result: dict[str, Any]) -> None:
     row = result["row"]
     print(f"Row: {row['study_id']} in analysis {row['analysis_id']}")
-    print(f"Citation: {row['citation']}" + (f" ({row['sex']})" if row["sex"] else ""))
+    # The stratum label is aggregate published metadata, not personal data; see
+    # the note beside "sex" in reconstruct_from_row.
+    stratum = f" ({row['sex']})" if row["sex"] else ""  # codeql[py/clear-text-logging-sensitive-data]
+    print(f"Citation: {row['citation']}{stratum}")
     print(f"Measure as reported: {row['measure']} (read from the dataset, not retyped)")
     if row["outcome_reported_originally"] or row["outcome_used_in_meta_analysis"]:
         print(
