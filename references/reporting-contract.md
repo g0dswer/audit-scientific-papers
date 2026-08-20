@@ -130,8 +130,12 @@ published adjusted model. Use the consistency checker only to assess arithmetic 
 and label reconstructed standard errors and values of p as approximate.
 
 For binary outcomes, show event counts, denominators, event definition, time horizon,
-risk difference, Newcombe--Wilson interval, and relative effects when defined. State if
-counts were inferred from percentages and whether the inference is unique.
+risk difference, Newcombe--Wilson interval, and relative effects when defined. Give the
+risk ratio and odds ratio with their confidence intervals, never as bare point estimates;
+when a zero cell makes an interval undefined, say so rather than omitting the uncertainty.
+State the assumed event direction explicitly, since it determines whether the reciprocal
+is a number needed to treat or to harm. State if counts were inferred from percentages and
+whether the inference is unique.
 
 ## 7. Clinical importance and MID
 
@@ -213,6 +217,9 @@ List major errors with severity and consequence, for example:
 - within-arm significance used as a between-arm claim;
 - unadjusted reconstruction presented as the adjusted estimand;
 - confidence interval crossing zero hidden behind a finite NNT;
+- a ratio measure tested against a null of zero instead of on the log scale;
+- a prediction interval quoted without its degrees-of-freedom convention;
+- relative effects reported as point estimates with no interval;
 - denominators or event definitions inconsistent;
 - subgroup or timepoint selected without interaction or multiplicity control;
 - safety denominator or exposure horizon omitted;

@@ -1,4 +1,5 @@
 import json
+import math
 import subprocess
 import sys
 import tempfile
@@ -15,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from reconstruct_meta_analysis import (  # noqa: E402
+    VALID_OVERLAP_STATUSES,
     MetaAnalysisError,
     _student_t_quantile,
     filter_records,
@@ -22,7 +24,28 @@ from reconstruct_meta_analysis import (  # noqa: E402
     meta_analysis,
     run_sensitivity_ladder,
 )
+from plot_forest import write_forest_svg  # noqa: E402
 from validate_meta_dataset import validate_records  # noqa: E402
+
+
+CSV_HEADER = (
+    "analysis_id,study_id,citation,cohort_id,effect,lower,upper,measure,"
+    "outcome_provenance,exposure_provenance,participant_overlap_possible,"
+    "overlap_status,include_published,input_confidence\n"
+)
+
+
+def _write_csv(directory, rows):
+    path = Path(directory) / "dataset.csv"
+    path.write_text(CSV_HEADER + "".join(rows), encoding="utf-8")
+    return path
+
+
+def _row(study_id, effect, lower, upper, *, overlap_status="none", input_confidence="", cohort_id=None):
+    return (
+        f"pool,{study_id},{study_id} 2020,{cohort_id or study_id},{effect},{lower},{upper},HR,"
+        f"DIRECT,DIRECT,false,{overlap_status},true,{input_confidence}\n"
+    )
 
 
 class NaghshiRegressionTests(unittest.TestCase):
@@ -116,6 +139,47 @@ class NaghshiRegressionTests(unittest.TestCase):
         self.assertAlmostEqual(ladder[0]["result"]["pooled"], 0.9394212689, delta=5e-10)
         self.assertEqual(ladder[1]["id"], "S2_direct_outcomes")
         self.assertEqual(ladder[2]["id"], "S3_common_measure")
+        for step in ladder:
+            with self.subTest(step=step["id"]):
+                self.assertEqual(step["model"], "random")
+
+    def test_sensitivity_ladder_honours_a_fixed_effect_request(self):
+        records = filter_records(self.records, analysis_id="total_all_cause")
+        gate = meta_analysis(
+            records, model="fixed", tau2_method="DL", allow_mixed_estimands=True
+        )
+        ladder = run_sensitivity_ladder(
+            records,
+            model="fixed",
+            tau2_method="DL",
+            common_measure="HR",
+            allow_mixed_estimands=True,
+        )
+        steps = {step["id"]: step for step in ladder}
+        # S1 must reproduce the very model the reproduction gate validated.
+        self.assertAlmostEqual(
+            steps["S1_published_reconstruction"]["result"]["pooled"], gate["pooled"], delta=5e-13
+        )
+        self.assertAlmostEqual(gate["pooled"], 0.9892243768546655, delta=5e-10)
+        for step_id in ("S1_published_reconstruction", "S2_direct_outcomes", "S3_common_measure",
+                        "S4_direct_outcome_common_measure", "S5_direct_exposure",
+                        "S8_leave_one_cluster_out"):
+            with self.subTest(step=step_id):
+                self.assertEqual(steps[step_id]["model"], "fixed")
+                self.assertEqual(steps[step_id]["result"]["model"], "fixed")
+                self.assertEqual(steps[step_id]["result"]["tau2"], 0.0)
+        # Random-effects-only rungs must not publish numbers under a fixed heading.
+        for step_id in ("S6_alternative_tau2", "S7_hksj"):
+            with self.subTest(step=step_id):
+                self.assertEqual(steps[step_id]["result"]["status"], "NOT_ASSESSABLE")
+                self.assertEqual(steps[step_id]["result"]["model"], "fixed")
+                self.assertIn("random-effects", steps[step_id]["result"]["reason"])
+        random_ladder = run_sensitivity_ladder(
+            records, model="random", tau2_method="DL", common_measure="HR", allow_mixed_estimands=True
+        )
+        self.assertAlmostEqual(
+            random_ladder[0]["result"]["pooled"], 0.9394212689, delta=5e-10
+        )
 
 
 class MetaAnalysisGuardrailTests(unittest.TestCase):
@@ -238,10 +302,93 @@ class MetaAnalysisGuardrailTests(unittest.TestCase):
         hksj = meta_analysis(records, tau2_method="DL", inference="HKSJ")
         self.assertAlmostEqual(normal["ci_lower"], 0.9006422182365167, delta=1e-12)
         self.assertAlmostEqual(normal["ci_upper"], 1.0047111625274052, delta=1e-12)
-        self.assertAlmostEqual(normal["prediction_lower"], 0.8275200024471621, delta=1e-12)
-        self.assertAlmostEqual(normal["prediction_upper"], 1.0934905348870398, delta=1e-12)
+        # Default convention is Student t on k-2 degrees of freedom (Cochrane
+        # Handbook; Higgins-Thompson-Spiegelhalter 2009; IntHout 2016).
+        self.assertEqual(normal["prediction_df_convention"], "k-2")
+        self.assertEqual(normal["prediction_interval_df"], 11)
+        self.assertAlmostEqual(normal["prediction_lower"], 0.8263473638682611, delta=1e-12)
+        self.assertAlmostEqual(normal["prediction_upper"], 1.0950422663294554, delta=1e-12)
         self.assertAlmostEqual(hksj["ci_lower"], 0.8760814699052611, delta=1e-12)
         self.assertAlmostEqual(hksj["ci_upper"], 1.0328780155611845, delta=1e-12)
+
+    def test_prediction_interval_conventions_and_degenerate_degrees_of_freedom(self):
+        records = filter_records(
+            self.records,
+            analysis_id="total_all_cause",
+            direct_outcomes_only=True,
+            common_measure="HR",
+        )
+        legacy = meta_analysis(records, tau2_method="DL", inference="normal", prediction_df="k-1")
+        self.assertEqual(legacy["prediction_df_convention"], "k-1")
+        self.assertEqual(legacy["prediction_interval_df"], 12)
+        self.assertAlmostEqual(legacy["prediction_lower"], 0.8275200024471621, delta=1e-12)
+        self.assertAlmostEqual(legacy["prediction_upper"], 1.0934905348870398, delta=1e-12)
+        with self.assertRaisesRegex(MetaAnalysisError, "prediction_df must be"):
+            meta_analysis(records, prediction_df="k-3")
+        pair = meta_analysis(records[:2])
+        self.assertIsNone(pair["prediction_lower"])
+        self.assertIsNone(pair["prediction_interval_df"])
+        self.assertIn("not estimable", pair["prediction_not_estimable_reason"])
+        self.assertAlmostEqual(
+            meta_analysis(records[:2], prediction_df="k-1")["prediction_interval_df"], 1
+        )
+
+    def test_prediction_interval_does_not_depend_on_hksj_inference(self):
+        records = filter_records(
+            self.records,
+            analysis_id="total_all_cause",
+            direct_outcomes_only=True,
+            common_measure="HR",
+        )
+        normal = meta_analysis(records, tau2_method="DL", inference="normal")
+        hksj = meta_analysis(records, tau2_method="DL", inference="HKSJ")
+        self.assertAlmostEqual(normal["tau2"], hksj["tau2"], delta=1e-14)
+        # The prediction interval describes the distribution of true effects and is
+        # always built from the conventional standard error.
+        self.assertAlmostEqual(hksj["prediction_lower"], normal["prediction_lower"], delta=1e-14)
+        self.assertAlmostEqual(hksj["prediction_upper"], normal["prediction_upper"], delta=1e-14)
+
+    def test_degenerate_hksj_scale_factor_is_not_estimable(self):
+        source = filter_records(self.records, analysis_id="total_all_cause", common_measure="HR")[:3]
+        identical = [replace(record, effect=0.74, lower=0.60, upper=0.91) for record in source]
+        self.assertAlmostEqual(meta_analysis(identical)["pooled"], 0.74, delta=1e-12)
+        with self.assertRaisesRegex(MetaAnalysisError, "not estimable"):
+            meta_analysis(identical, inference="HKSJ")
+
+    def test_hksj_floor_is_the_ratio_to_the_conventional_interval(self):
+        # The scale factor is exactly (SE_HKSJ / SE_conventional)**2, so the floor
+        # is a statement about interval collapse, not an arbitrary tolerance.
+        source = filter_records(self.records, analysis_id="total_all_cause", common_measure="HR")[:3]
+        base = source[0]
+        near_identical = [
+            base,
+            replace(source[1], effect=base.effect + 1e-8, lower=base.lower, upper=base.upper),
+            replace(source[2], effect=base.effect + 2e-8, lower=base.lower, upper=base.upper),
+        ]
+        with self.assertRaisesRegex(MetaAnalysisError, "times narrower than the conventional"):
+            meta_analysis(near_identical, inference="HKSJ")
+
+        # A pool with real dispersion is unaffected, and sqrt(q) is the ratio.
+        clean = filter_records(
+            self.records,
+            analysis_id="total_all_cause",
+            direct_outcomes_only=True,
+            common_measure="HR",
+        )
+        fitted = meta_analysis(clean, inference="HKSJ")
+        self.assertAlmostEqual(
+            fitted["standard_error_linear"],
+            math.sqrt(fitted["hksj_scale_q"]) * fitted["conventional_standard_error_linear"],
+            delta=1e-15,
+        )
+        self.assertAlmostEqual(fitted["ci_lower"], 0.8760814699052611, delta=1e-12)
+        self.assertAlmostEqual(fitted["ci_upper"], 1.0328780155611845, delta=1e-12)
+
+    def test_ratio_and_linear_measures_report_the_actual_incompatibility(self):
+        source = filter_records(self.records, analysis_id="total_all_cause", common_measure="HR")[:2]
+        mixed_scales = [replace(source[0]), replace(source[1], measure="MD")]
+        with self.assertRaisesRegex(MetaAnalysisError, "Ratio measures cannot be pooled with linear"):
+            meta_analysis(mixed_scales, allow_mixed_estimands=True)
 
     def test_fixed_model_has_no_prediction_interval_and_rejects_hksj(self):
         records = filter_records(self.records, analysis_id="total_all_cause", common_measure="HR")
@@ -330,6 +477,182 @@ class MetaAnalysisGuardrailTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 2)
         self.assertEqual(json.loads(completed.stdout)["published_reproduction"]["status"], "FAIL")
+
+    def test_unknown_overlap_status_is_rejected_at_load_time(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset = _write_csv(
+                temp_dir,
+                [
+                    _row("A", 0.90, 0.80, 1.01, overlap_status="unresolvd"),
+                    _row("B", 0.95, 0.85, 1.06),
+                ],
+            )
+            with self.assertRaisesRegex(MetaAnalysisError, "Unknown overlap status .*at row 2"):
+                load_records(dataset)
+
+    def test_unknown_overlap_status_never_pools_silently(self):
+        source = filter_records(self.records, analysis_id="total_all_cause", common_measure="HR")[:3]
+        for status in ("unresolvd", "pending"):
+            with self.subTest(status=status):
+                records = [
+                    replace(source[0], participant_overlap_possible=True, overlap_status=status),
+                    replace(source[1]),
+                    replace(source[2]),
+                ]
+                with self.assertRaisesRegex(MetaAnalysisError, "Unknown overlap status"):
+                    meta_analysis(records)
+                self.assertIn(
+                    "INVALID_OVERLAP_STATUS",
+                    {issue["code"] for issue in validate_records(records)["issues"]},
+                )
+        self.assertEqual(len(VALID_OVERLAP_STATUSES), 7)
+        self.assertIn("possible", VALID_OVERLAP_STATUSES)
+
+    def test_per_row_input_confidence_overrides_the_global_default(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mixed = load_records(
+                _write_csv(
+                    temp_dir,
+                    [
+                        _row("A", 0.90, 0.80, 1.01, input_confidence="0.90"),
+                        _row("B", 0.95, 0.85, 1.06),
+                    ],
+                )
+            )
+        self.assertEqual(mixed[0].input_confidence, 0.90)
+        self.assertIsNone(mixed[1].input_confidence)
+        result = meta_analysis(mixed)
+        self.assertEqual(result["input_confidence_levels"], [0.90, 0.95])
+        uniform = [replace(record, input_confidence=None) for record in mixed]
+        self.assertEqual(meta_analysis(uniform)["input_confidence_levels"], [0.95])
+        # A 90% source interval implies a larger standard error, so the row is
+        # down-weighted relative to the same row read as a 95% interval.
+        self.assertLess(
+            result["study_weights_percent"][0]["weight"],
+            meta_analysis(uniform)["study_weights_percent"][0]["weight"],
+        )
+        # A per-row value equal to the global default reproduces it exactly.
+        pinned = [replace(record, input_confidence=0.95) for record in mixed]
+        self.assertAlmostEqual(
+            meta_analysis(pinned)["pooled"], meta_analysis(uniform)["pooled"], delta=1e-15
+        )
+
+    def test_invalid_per_row_input_confidence_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset = _write_csv(
+                temp_dir,
+                [
+                    _row("A", 0.90, 0.80, 1.01, input_confidence="95"),
+                    _row("B", 0.95, 0.85, 1.06),
+                ],
+            )
+            with self.assertRaisesRegex(MetaAnalysisError, "input_confidence must be strictly"):
+                load_records(dataset)
+            dataset = _write_csv(
+                temp_dir,
+                [
+                    _row("A", 0.90, 0.80, 1.01, input_confidence="ninety"),
+                    _row("B", 0.95, 0.85, 1.06),
+                ],
+            )
+            with self.assertRaisesRegex(MetaAnalysisError, "Invalid row 2"):
+                load_records(dataset)
+
+    def test_forest_squares_use_row_weights_not_study_id_lookup(self):
+        source = filter_records(self.records, analysis_id="total_all_cause", common_measure="HR")
+        duplicated = [
+            replace(source[0], study_id="Shared", cohort_id="c1", citation="First row"),
+            replace(source[5], study_id="Shared", cohort_id="c2", citation="Second row"),
+            replace(source[7], study_id="Other", cohort_id="c3", citation="Third row"),
+        ]
+        result = meta_analysis(duplicated)
+        weights = [item["weight"] for item in result["study_weights_percent"]]
+        self.assertNotAlmostEqual(weights[0], weights[1], places=3)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / "duplicate.svg"
+            write_forest_svg(duplicated, result, destination)
+            sides = [
+                float(fragment.split('width="')[1].split('"')[0])
+                for fragment in destination.read_text().splitlines()
+                if fragment.startswith("<rect x=")
+            ]
+        self.assertEqual(len(sides), len(duplicated))
+        self.assertNotAlmostEqual(sides[0], sides[1], places=3)
+
+    def test_forest_omits_the_null_line_when_it_is_off_scale(self):
+        source = filter_records(self.records, analysis_id="total_all_cause", common_measure="HR")[:3]
+        far = [
+            replace(record, effect=2.0 + index, lower=1.8 + index, upper=2.4 + index)
+            for index, record in enumerate(source)
+        ]
+        # A fixed-effect fit keeps the plotted range entirely above the null.
+        result = meta_analysis(far, model="fixed")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / "offscale.svg"
+            write_forest_svg(far, result, destination)
+            svg = destination.read_text()
+        self.assertNotIn("stroke-dasharray", svg)
+
+    def test_secondary_entry_points_report_guardrails_without_a_traceback(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dependent = Path(temp_dir) / "dependent.csv"
+            dependent.write_text(
+                FIXTURE.read_text().replace(",false,none,", ",true,unresolved,"), encoding="utf-8"
+            )
+            blocked = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_DIR / "compare_meta_models.py"),
+                    str(dependent),
+                    "--analysis-id",
+                    "total_all_cause",
+                    "--common-measure",
+                    "HR",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(blocked.returncode, 0)
+            self.assertNotIn("Traceback", blocked.stderr)
+            self.assertTrue(blocked.stderr.startswith("error: "))
+            allowed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_DIR / "compare_meta_models.py"),
+                    str(dependent),
+                    "--analysis-id",
+                    "total_all_cause",
+                    "--common-measure",
+                    "HR",
+                    "--allow-dependence",
+                    "--json",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertTrue(json.loads(allowed.stdout)[0]["warnings"])
+
+            forest = Path(temp_dir) / "blocked.svg"
+            plotted = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_DIR / "plot_forest.py"),
+                    str(dependent),
+                    str(forest),
+                    "--analysis-id",
+                    "total_all_cause",
+                    "--common-measure",
+                    "HR",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(plotted.returncode, 0)
+            self.assertNotIn("Traceback", plotted.stderr)
+            self.assertTrue(plotted.stderr.startswith("error: "))
 
     def test_comparison_and_forest_outputs_preserve_warnings(self):
         comparison = subprocess.run(

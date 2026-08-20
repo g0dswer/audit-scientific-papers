@@ -121,13 +121,58 @@ python3 scripts/reconstruct_meta_analysis.py meta_data.csv \
   --sensitivity all \
   --allow-mixed-estimands \
   --json
+
+# Draw a forest plot of the reconstruction (dependency-free SVG)
+python3 scripts/plot_forest.py meta_data.csv forest.svg \
+  --analysis-id primary_pool \
+  --common-measure HR
+
+# Absolute effects for a two-arm binary outcome; state the event direction
+python3 scripts/calculate_binary_effects.py 16 41 12 39 --harm --json
+
+# Consistency checks on a published estimate and interval
+python3 scripts/verify_continuous_result.py ci -4.04 -6.89 -1.18 --measure MD --json
+python3 scripts/verify_continuous_result.py ci 0.75 0.60 0.94 --measure HR --json
+
+# Check one extracted row without retyping its numbers or its measure
+python3 scripts/verify_continuous_result.py row meta_data.csv STUDY_ID \
+  --analysis-id primary_pool --json
 ```
 
 Use `--allow-mixed-estimands` only when the published forest plot itself mixed native
 ratio measures and the first step must reproduce that choice. It does not make the pooled
 estimand scientifically valid. The source intervals are assumed to be 95% intervals by
-default; use `--input-confidence` when they are not. `--confidence` controls the requested
-output interval without changing the reconstructed study variances.
+default; use `--input-confidence`, or a per-row `input_confidence` column when a forest
+plot mixes levels. `--confidence` controls the requested output interval without changing
+the reconstructed study variances.
+
+### Statistical conventions
+
+- **Prediction intervals** use Student's t on **k − 2** degrees of freedom, the Cochrane
+  Handbook and Higgins–Thompson–Spiegelhalter convention. Pass `--prediction-df k-1` for
+  the model-degrees-of-freedom alternative that some software reports. Every output states
+  which convention it used.
+- **Prediction intervals always use the conventional inverse-variance standard error**,
+  even under `--inference HKSJ`, so choosing HKSJ for the confidence interval does not
+  silently widen the prediction interval.
+- **`--model fixed` is honoured across the whole sensitivity ladder.** Rungs that are
+  meaningful only for random effects report `NOT_ASSESSABLE` rather than publishing
+  random-effects numbers under a fixed-effect heading.
+- **Ratio measures must be analyzed on the log scale.** The continuous checker requires
+  exactly one of `--measure {HR,RR,OR,IRR,RATIO,MD,SMD}` or `--scale {linear,ratio}`, with
+  no default, because a hazard, odds, or risk ratio sent down the linear path gets a badly
+  wrong p-value and a spurious interval asymmetry. Prefer `--measure`: it is the vocabulary
+  the source and the extraction schema already use, so the scale follows from an audited
+  field instead of a judgement call. Better still, `row` reads an extracted dataset and
+  takes the effect, interval, measure, and interval level from the row itself, so nothing
+  is retyped. A heuristic also warns when an input looks like an unlogged ratio, but it is
+  a second net: it cannot detect a ratio close to the null with a narrow interval, which is
+  exactly the shape of the largest cohort studies.
+- **Event direction is explicit.** `calculate_binary_effects.py` takes `--harm` or
+  `--benefit`; if neither is given it assumes a beneficial event and says so prominently,
+  because the assumption inverts NNT and NNH labels.
+- **Dependence guards fail closed.** An unrecognized `overlap_status` is a blocking error,
+  not a value that quietly bypasses the overlap check.
 
 The repository includes a versioned Naghshi 2020 fixture as a regression test. It checks
 published reconstruction and cleaner provenance/common-measure scenarios without changing

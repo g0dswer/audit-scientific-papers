@@ -79,7 +79,16 @@ When valid two-arm event counts exist, run:
 python3 scripts/calculate_binary_effects.py E1 N1 E0 N0 --json
 ```
 
-Add `--harm` when the event is undesirable. Inspect the event definition, time horizon, analysis population, denominator consistency, competing risks, and whether inferred counts are unique before calculating.
+State the event direction explicitly every time: `--harm` when the event is undesirable
+(death, infarction, relapse), `--benefit` when it is desirable (cure, response). If you
+pass neither, the tool assumes the event is beneficial and says so loudly in its output —
+never let that assumption pass into the report unexamined, because it inverts the NNT and
+NNH labels. Inspect the event definition, time horizon, analysis population, denominator
+consistency, competing risks, and whether inferred counts are unique before calculating.
+
+The calculator reports the risk difference with a Newcombe–Wilson interval, and the risk
+ratio and odds ratio with large-sample log-scale intervals. Undefined relative effects
+(zero cells) are returned as explicit nulls, never as hidden finite values.
 
 Mandatory output rule:
 
@@ -92,8 +101,45 @@ Do not convert a standardized continuous effect into a number needed to treat un
 For a published continuous estimate and confidence interval, run:
 
 ```bash
-python3 scripts/verify_continuous_result.py ci ESTIMATE LOWER UPPER --json
+python3 scripts/verify_continuous_result.py ci ESTIMATE LOWER UPPER --measure MD --json
+python3 scripts/verify_continuous_result.py ci ESTIMATE LOWER UPPER --measure HR --json
 ```
+
+When the estimate already exists as a row in an extracted dataset, check it straight from
+the row instead of retyping anything:
+
+```bash
+python3 scripts/verify_continuous_result.py row meta_data.csv STUDY_ID \
+  --analysis-id HEADLINE_POOL --json
+```
+
+`row` takes the effect, interval, effect measure, and source interval level from the row
+itself, so the analysis scale is inherited from the audited `measure` column rather than
+chosen again by hand. It echoes the row's citation, source location, and outcome
+provenance alongside the reconstruction, and flags a row whose outcome or exposure
+provenance is not direct or validly derived. Pass `--analysis-id` when a study appears in
+more than one pool; the command refuses an ambiguous or duplicated identifier rather than
+picking a row for you. Prefer `row` over `ci` whenever the dataset exists.
+
+**Name the effect measure. Exactly one of `--measure` or `--scale` is required and
+neither has a default; the command fails rather than guess.** Prefer `--measure`, which
+takes the measure as the source reports it — `HR`, `RR`, `OR`, `IRR`, `RATIO`, `MD`,
+`SMD` — the same vocabulary the extraction schema audits row by row, and derives the
+analysis scale from it. Reach for `--scale linear` or `--scale ratio` only for a measure
+outside that list.
+
+The distinction is not cosmetic. A difference measure is tested against a null of zero on
+the reported scale. A ratio measure has a null of one and must be analyzed on the log
+scale; sending it down the linear path produces a badly wrong p-value and a spurious
+interval asymmetry — two fabricated findings of exactly the kind this audit exists to
+catch.
+
+The tool also warns when an input has the signature of an unlogged ratio, and that guard
+stays active on the linear path even when a measure was named, so a mislabeled `MD` row is
+still flagged. Treat it as a second net only: it cannot fire on a ratio close to the null
+with a narrow interval, such as HR 0.98 (0.94 to 1.02), where the linear path still returns
+a z of 48 against a true value near −1. Identify the measure from the source; do not wait
+for the warning.
 
 For group baseline and endpoint means, run:
 
@@ -142,9 +188,17 @@ python3 scripts/reconstruct_meta_analysis.py meta_data.csv \
 ```
 
 Use the override only if the publication mixed ratio measures in the headline pool. Keep
-the source interval level (`--input-confidence`, default 0.95) separate from the requested
-output interval (`--confidence`). Require one `analysis_id`; never combine separate forest
-plots simply because they share a CSV.
+the source interval level (`--input-confidence`, default 0.95, overridable per row with an
+`input_confidence` column) separate from the requested output interval (`--confidence`).
+Require one `analysis_id`; never combine separate forest plots simply because they share a
+CSV.
+
+Reconstruct the published pool with the model the authors used. `--model fixed` is honoured
+throughout the sensitivity ladder, so the published-reconstruction rung reproduces the
+model the reproduction gate validated; the random-effects-only rungs report
+`NOT_ASSESSABLE` instead of quietly switching models. Prediction intervals default to the
+Cochrane `k - 2` degrees-of-freedom convention (`--prediction-df k-1` for the alternative);
+always report which convention produced the interval you quote.
 
 Do not automatically convert hazard ratios, risk ratios, and odds ratios. If compatible
 native estimates cannot be isolated, prefer separate pools or structured synthesis without
@@ -212,7 +266,8 @@ For a meta-analysis, also confirm:
 - cohort overlap and multiple correlated rows assessed;
 - adjustment-set heterogeneity assessed for observational estimates;
 - between-study variance estimator and inference method identified;
-- Hartung–Knapp–Sidik–Jonkman and prediction-interval sensitivity considered;
+- Hartung–Knapp–Sidik–Jonkman and prediction-interval sensitivity considered, with the
+  prediction-interval degrees-of-freedom convention stated;
 - leave-one-cohort-cluster-out influence analysis performed when estimable;
 - high-risk-of-bias and overlap sensitivity performed when substantively justified;
 - robustness classified as robust, directionally robust but inference-sensitive,

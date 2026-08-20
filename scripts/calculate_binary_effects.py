@@ -120,15 +120,85 @@ def _odds_ratio(e1: int, n1: int, e0: int, n0: int) -> float | None:
     return numerator / denominator
 
 
+def _risk_ratio_interval(
+    e1: int, n1: int, e0: int, n0: int, confidence: float
+) -> dict[str, Any] | None:
+    """Katz large-sample interval: SE(log RR) = sqrt(1/e1 - 1/n1 + 1/e0 - 1/n0).
+
+    A zero event count in either arm makes the log-scale variance undefined.
+    The interval is then an explicit null: no continuity correction is added,
+    matching the point estimate's contract.
+    """
+
+    risk_ratio = _risk_ratio(e1 / n1, e0 / n0)
+    if risk_ratio is None or e1 == 0:
+        return None
+    standard_error = math.sqrt(1.0 / e1 - 1.0 / n1 + 1.0 / e0 - 1.0 / n0)
+    z = _z_value(confidence)
+    log_estimate = math.log(risk_ratio)
+    return {
+        "lower": math.exp(log_estimate - z * standard_error),
+        "upper": math.exp(log_estimate + z * standard_error),
+        "log_estimate": log_estimate,
+        "log_standard_error": standard_error,
+        "method": "katz_log",
+        "approximate": True,
+    }
+
+
+def _odds_ratio_interval(
+    e1: int, n1: int, e0: int, n0: int, confidence: float
+) -> dict[str, Any] | None:
+    """Woolf large-sample interval: SE(log OR) = sqrt(1/a + 1/b + 1/c + 1/d).
+
+    Any zero cell makes the log-scale variance undefined.  The interval is then
+    an explicit null: no continuity correction is added, matching the point
+    estimate's contract.
+    """
+
+    odds_ratio = _odds_ratio(e1, n1, e0, n0)
+    cells = (e1, n1 - e1, e0, n0 - e0)
+    if odds_ratio is None or odds_ratio <= 0.0 or any(cell == 0 for cell in cells):
+        return None
+    standard_error = math.sqrt(sum(1.0 / cell for cell in cells))
+    z = _z_value(confidence)
+    log_estimate = math.log(odds_ratio)
+    return {
+        "lower": math.exp(log_estimate - z * standard_error),
+        "upper": math.exp(log_estimate + z * standard_error),
+        "log_estimate": log_estimate,
+        "log_standard_error": standard_error,
+        "method": "woolf_log",
+        "approximate": True,
+    }
+
+
 def _fisher_exact_two_sided(e1: int, n1: int, e0: int, n0: int) -> float | None:
-    """Return SciPy's optional two-sided Fisher value, or None if unavailable."""
+    """Return SciPy's optional two-sided Fisher value, or None if unavailable.
+
+    SciPy is an optional dependency, so no failure in this path may break the
+    rest of the analysis.  SciPy 1.10 and later return a ``SignificanceResult``
+    carrying ``.pvalue``; earlier releases returned a bare
+    ``(odds_ratio, p_value)`` tuple.  Both shapes are accepted, and any other
+    failure (missing module, changed signature, numerical error) degrades to
+    ``None``.
+    """
 
     try:
         from scipy.stats import fisher_exact  # type: ignore
-    except ImportError:
+
+        table = [[e1, n1 - e1], [e0, n0 - e0]]
+        outcome = fisher_exact(table, alternative="two-sided")
+        p_value = getattr(outcome, "pvalue", None)
+        if p_value is None:
+            # Legacy SciPy (< 1.10) returned a plain (odds_ratio, p_value) tuple.
+            p_value = outcome[1]
+        p_value = float(p_value)
+    except Exception:
         return None
-    table = [[e1, n1 - e1], [e0, n0 - e0]]
-    return float(fisher_exact(table, alternative="two-sided").pvalue)
+    if not math.isfinite(p_value):
+        return None
+    return p_value
 
 
 def _reciprocal_interval(
@@ -158,11 +228,14 @@ def _reciprocal_interval(
 def _split_reciprocal_interval(signed_lower: float, signed_upper: float) -> dict[str, int | None]:
     benefit_from = _ceil_positive(1.0 / signed_upper) if signed_upper > 0.0 else None
     harm_from = _ceil_positive(1.0 / abs(signed_lower)) if signed_lower < 0.0 else None
+    # Each side of a split reciprocal interval runs out to infinity at the
+    # no-effect boundary, so the upper bounds are deliberately unbounded and
+    # are emitted as explicit nulls rather than a finite number.
     return {
         "benefit_from": benefit_from,
-        "benefit_to": None if benefit_from is not None else None,
+        "benefit_to": None,
         "harm_from": harm_from,
-        "harm_to": None if harm_from is not None else None,
+        "harm_to": None,
     }
 
 
@@ -172,20 +245,40 @@ def analyze_binary(
     e0: int,
     n0: int,
     confidence: float = 0.95,
-    beneficial: bool = True,
+    beneficial: bool | None = None,
 ) -> dict[str, Any]:
     """Analyze event counts and return absolute and relative effects.
 
     ``risk_difference`` is always treatment risk minus comparator risk.  When
     ``beneficial`` is false, the clinical sign used for classification and
     NNT/NNH labeling is reversed because a higher event risk is undesirable.
+
+    ``beneficial`` defaults to ``None``, meaning the event direction was not
+    stated.  The historical default (event treated as desirable) is then kept,
+    but the result carries an explicit notice, because most audited binary
+    outcomes are harms and an unstated direction silently inverts the NNT/NNH
+    labels.
     """
 
     e1, n1 = _validate_events_total(e1, n1, "e1", "n1")
     e0, n0 = _validate_events_total(e0, n0, "e0", "n0")
     confidence = _validate_confidence(confidence)
-    if not isinstance(beneficial, bool):
-        raise ValueError("beneficial must be a boolean")
+    if beneficial is not None and not isinstance(beneficial, bool):
+        raise ValueError("beneficial must be a boolean or None")
+    direction_specified = beneficial is not None
+    if beneficial is None:
+        beneficial = True
+    direction_notice = (
+        None
+        if direction_specified
+        else (
+            "EVENT DIRECTION NOT SPECIFIED: the counted event was assumed to be "
+            "BENEFICIAL (desirable), so NNT and NNH labels follow that "
+            "assumption. Most audited binary outcomes are harms (death, "
+            "infarction, relapse). Pass --harm for an undesirable event or "
+            "--benefit to state the assumption explicitly."
+        )
+    )
 
     risk1 = e1 / n1
     risk0 = e0 / n0
@@ -243,9 +336,21 @@ def analyze_binary(
         "reciprocal_interval": reciprocal_interval,
         "split_interval": split_interval,
         "risk_ratio": _risk_ratio(risk1, risk0),
+        "risk_ratio_ci": _risk_ratio_interval(e1, n1, e0, n0, confidence),
         "odds_ratio": _odds_ratio(e1, n1, e0, n0),
+        "odds_ratio_ci": _odds_ratio_interval(e1, n1, e0, n0, confidence),
+        "relative_effect_note": (
+            "Risk-ratio and odds-ratio intervals are large-sample "
+            "approximations computed on the log scale (Katz and Woolf "
+            "respectively) and back-transformed. No continuity correction is "
+            "applied: when a cell entering the standard error is zero the "
+            "interval is an explicit null, not a hidden finite estimate."
+        ),
         "confidence": confidence,
         "beneficial_event": beneficial,
+        "event_direction": "beneficial" if beneficial else "harmful",
+        "event_direction_specified": direction_specified,
+        "event_direction_notice": direction_notice,
         "fisher_exact_p_two_sided": _fisher_exact_two_sided(e1, n1, e0, n0),
     }
 
@@ -256,10 +361,45 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("total_treatment", type=int)
     parser.add_argument("events_control", type=int)
     parser.add_argument("total_control", type=int)
-    parser.add_argument("--harm", action="store_true", help="treat the event as undesirable")
+    direction = parser.add_mutually_exclusive_group()
+    direction.add_argument("--harm", action="store_true", help="treat the event as undesirable")
+    direction.add_argument(
+        "--benefit",
+        action="store_true",
+        help="treat the event as desirable (the assumed default, stated explicitly)",
+    )
     parser.add_argument("--confidence", type=float, default=0.95)
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     return parser
+
+
+def _print_relative_effect(
+    label: str, estimate: float | None, interval: dict[str, Any] | None, confidence: float
+) -> None:
+    if estimate is None:
+        print(f"{label}: undefined (zero cell; no continuity correction applied)")
+        return
+    if interval is None:
+        print(
+            f"{label}: {estimate:.6g} "
+            f"({confidence:.0%} CI undefined: zero cell, no continuity correction applied)"
+        )
+        return
+    print(
+        f"{label}: {estimate:.6g} "
+        f"(large-sample {confidence:.0%} CI [{interval['lower']:.6g}, "
+        f"{interval['upper']:.6g}], {interval['method']})"
+    )
+
+
+def _cli_direction(harm: bool, benefit: bool) -> bool | None:
+    """Map the mutually exclusive direction flags onto ``beneficial``."""
+
+    if harm:
+        return False
+    if benefit:
+        return True
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -272,7 +412,7 @@ def main(argv: list[str] | None = None) -> int:
             args.events_control,
             args.total_control,
             confidence=args.confidence,
-            beneficial=not args.harm,
+            beneficial=_cli_direction(args.harm, args.benefit),
         )
     except ValueError as error:
         parser.error(str(error))
@@ -284,6 +424,9 @@ def main(argv: list[str] | None = None) -> int:
             print("Binary effect inconclusive: risk-difference interval crosses zero")
         else:
             print(f"Binary effect: {result['classification']}")
+        print(f"Event direction: {result['event_direction']}")
+        if result["event_direction_notice"] is not None:
+            print("NOTICE: " + result["event_direction_notice"])
         print(f"Treatment risk: {result['risk_treatment']:.6g}")
         print(f"Control risk: {result['risk_control']:.6g}")
         print(f"Risk difference: {result['risk_difference']:.6g}")
@@ -296,11 +439,19 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{estimate['label']}: {estimate['unrounded']:.6g} (rounded {estimate['rounded']})")
         if result["split_interval"] is not None:
             split = result["split_interval"]
+            benefit_side = (
+                f"possible benefit NNT >= {split['benefit_from']}"
+                if split["benefit_from"] is not None
+                else "no possible benefit side (interval bound at zero)"
+            )
+            harm_side = (
+                f"possible harm NNH >= {split['harm_from']}"
+                if split["harm_from"] is not None
+                else "no possible harm side (interval bound at zero)"
+            )
             print(
                 "Split reciprocal interval: "
-                f"possible benefit NNT >= {split['benefit_from']}; "
-                "no effect at infinity; "
-                f"possible harm NNH >= {split['harm_from']}"
+                f"{benefit_side}; no effect at infinity; {harm_side}"
             )
         elif result["reciprocal_interval"] is not None:
             interval = result["reciprocal_interval"]
@@ -308,6 +459,13 @@ def main(argv: list[str] | None = None) -> int:
                 f"Reciprocal {result['confidence']:.0%} CI: "
                 f"[{interval['lower']:.6g}, {interval['upper']:.6g}]"
             )
+        _print_relative_effect(
+            "Risk ratio", result["risk_ratio"], result["risk_ratio_ci"], result["confidence"]
+        )
+        _print_relative_effect(
+            "Odds ratio", result["odds_ratio"], result["odds_ratio_ci"], result["confidence"]
+        )
+        print(result["relative_effect_note"])
     return 0
 
 

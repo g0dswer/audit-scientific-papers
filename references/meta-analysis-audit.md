@@ -117,16 +117,23 @@ not proof of its absence. Do not use trim-and-fill as an automatic correction fo
 
 Read [meta-analysis-sensitivity.md](meta-analysis-sensitivity.md). At minimum compare:
 
-1. exact published reconstruction;
-2. directly measured or validly derived outcomes;
-3. a common effect measure/estimand;
-4. direct outcomes plus common measure;
-5. defensible exposure derivations only;
-6. DerSimonian–Laird, Paule–Mandel, and restricted maximum likelihood;
-7. Hartung–Knapp–Sidik–Jonkman inference;
-8. prediction intervals;
-9. leave-one-cohort-cluster-out refits;
-10. high-risk-of-bias and unresolved-overlap exclusions when prespecified and meaningful.
+The rung identifiers below match `meta-analysis-sensitivity.md` and the `sensitivity_ladder`
+output of the script exactly. Use the same identifiers in the report.
+
+1. `S1` exact published reconstruction;
+2. `S2` directly measured or validly derived outcomes;
+3. `S3` a common effect measure/estimand;
+4. `S4` direct outcomes plus common measure;
+5. `S5` defensible exposure derivations only;
+6. `S6` DerSimonian–Laird, Paule–Mandel, and restricted maximum likelihood;
+7. `S7` Hartung–Knapp–Sidik–Jonkman inference;
+8. `S8` leave-one-cohort-cluster-out refits;
+9. `S9` high-risk-of-bias exclusions when prespecified and meaningful;
+10. `S10` remove or model overlapping cohorts.
+
+Prediction intervals are not a separate rung: every random-effects rung reports one,
+together with the degrees-of-freedom convention that produced it. `S9` and `S10` are not
+automated — they need substantive risk-of-bias and dependence judgments.
 
 Use:
 
@@ -144,6 +151,22 @@ python3 scripts/compare_meta_models.py meta_data.csv \
   --direct-outcomes-only \
   --json
 ```
+
+To render the reconstructed pool as a forest plot, either add `--forest PATH.svg` to
+`reconstruct_meta_analysis.py` or call the plotter directly:
+
+```bash
+python3 scripts/plot_forest.py meta_data.csv forest.svg \
+  --analysis-id HEADLINE_POOL \
+  --common-measure HR \
+  --title "Reconstructed pool"
+```
+
+The plot is a dependency-free SVG. Study marker area is proportional to the fitted weight,
+the diamond is the pooled estimate and its confidence interval, and any model warnings are
+printed on the figure itself. Compare it against the published forest plot row by row; a
+reconstruction that matches numerically can still reveal a mislabeled or missing row
+visually. Use the plot as an audit aid, never as a replacement for the published figure.
 
 The standard-library engine reconstructs aggregate inverse-variance models; it is not an
 individual-participant-data engine and does not fit multivariate covariance models. When
