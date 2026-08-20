@@ -19,3 +19,6 @@ env/
 .idea/
 *.swp
 .DS_Store
+
+# Managed updater state (created only in installed, non-Git copies)
+.update-state.json

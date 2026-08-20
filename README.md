@@ -36,13 +36,63 @@ Install or import the Audit Scientific Papers skill from:
 https://github.com/g0dswer/audit-scientific-papers
 
 Read SKILL.md and every referenced file, preserve the repository structure, run all
-tests, and validate the skill. Then use Audit Scientific Papers to audit this study:
+tests, and validate the skill. Install it as a managed copy without `.git` metadata if
+you want consent-based updates; keep `.git` only for a developer checkout. Then use Audit
+Scientific Papers to audit this study:
 
 [PASTE DOI OR URL, OR ATTACH THE PAPER]
 ```
 
 If your interface supports skill mentions, select `@Audit Scientific Papers`. In Codex,
 the installed skill may be invoked as `$audit-scientific-papers`.
+
+## Stable updates
+
+The skill checks the repository's latest published, non-prerelease GitHub release once at
+the beginning of an audit. If a newer semantic version is available, it shows the installed
+and available versions, exact release commit, release summary, material changes, and
+release link, then asks whether to update before proceeding. It never interprets an audit
+request as permission to update and never silently replaces local files.
+
+After consent, the bundled updater verifies that the approved version and commit have not
+changed, downloads that exact commit into temporary storage, rejects unsafe archive
+entries, validates and revalidates the staged candidate, and installs it with an automatic
+restore on ordinary activation failures. A successful update retains the previous version
+for an explicit rollback, records its content digest, and verifies that digest before
+restoring it.
+
+The installer does not execute the downloaded test suite: downloaded Python would run with
+the user's privileges and is not a security sandbox. Tests are a publishing gate for the
+maintainer, while installation uses non-executing package validation. The updater trusts
+the named GitHub repository; commit pinning prevents a release tag from changing after
+consent, but it does not protect against compromise of the repository or maintainer account.
+
+Check manually with:
+
+```bash
+python3 scripts/check_for_update.py --json
+```
+
+Users who installed a version from before `v1.0.0` must reinstall once to bootstrap this
+mechanism. After that, future stable releases are detected when the skill is invoked. A
+network failure never blocks an audit, and a Git checkout is never replaced automatically.
+
+### Publishing a stable version
+
+Development commits on `main` are never offered directly. To publish an update:
+
+1. choose the next semantic version and update both `VERSION` and
+   `skill-manifest.json` in the same reviewed change;
+2. update the manifest's summary, changes, publication date, tag, and minimum updater
+   protocol when needed;
+3. run `python3 -m unittest discover -s scripts -p 'test_*.py' -v` and validate the skill;
+4. require the repository's test workflow to pass on the reviewed change;
+5. merge the reviewed change, tag that exact merge commit as `v<version>`, and publish a
+   non-draft, non-prerelease GitHub release whose publication date matches the manifest.
+
+The checker resolves the release tag to a commit and the user's consent is bound to that
+commit. If the release, tag, manifest, approval, or candidate identity is inconsistent, the
+installed version remains active.
 
 If personal skill installation is unavailable, paste this instead:
 
