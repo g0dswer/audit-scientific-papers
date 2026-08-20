@@ -36,9 +36,15 @@ Install or import the Audit Scientific Papers skill from:
 https://github.com/g0dswer/audit-scientific-papers
 
 Read SKILL.md and every referenced file, preserve the repository structure, run all
-tests, and validate the skill. Install it as a managed copy without `.git` metadata if
-you want consent-based updates; keep `.git` only for a developer checkout. Then use Audit
-Scientific Papers to audit this study:
+tests, and validate the skill.
+```
+Install it as a managed copy without `.git` metadata if
+you want consent-based updates; keep `.git` only for a developer checkout.
+
+
+Then use:
+```text
+@audit-scientific-papers audit this study:
 
 [PASTE DOI OR URL, OR ATTACH THE PAPER]
 ```
